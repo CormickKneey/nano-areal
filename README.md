@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 **[English](README_EN.md)** | 中文
@@ -216,7 +218,7 @@ lm_head  (与 embed_tokens 权重共享)
 
 ## 编写自己的智能体
 
-任何返回 `{response_id: reward}` 的异步函数都可用：
+任何返回 `float`（最后一轮奖励）或 `{response_id: reward}` 的异步函数都可用：
 
 ```python
 class MyAgent(AgentBase):
