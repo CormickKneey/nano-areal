@@ -13,18 +13,24 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import copy
+import logging
 import os
 import subprocess
 import time
 from typing import TYPE_CHECKING
 
-import httpx
-from openai import AsyncOpenAI
+import torch
+
+from nano_areal.engine.multimodal import PromptProcessor
 
 if TYPE_CHECKING:
+    from nano_areal.archon.model import Qwen35Model
     from nano_areal.config import ModelConfig, RolloutConfig
+    from nano_areal.engine.local_server import LocalInferenceServer
     from nano_areal.engine.proxy import OpenAIProxyServer
 
+logger = logging.getLogger("nano_areal.rollout")
 
 
 class RolloutEngine:
@@ -42,12 +48,18 @@ class RolloutEngine:
         model_config: "ModelConfig",
         rollout_config: "RolloutConfig",
         tokenizer=None,
+        processor: PromptProcessor | None = None,
+        local_model: "Qwen35Model | None" = None,
     ):
         self.model_config = model_config
         self.rollout_config = rollout_config
         self.tokenizer = tokenizer
+        self.processor = processor or (PromptProcessor(tokenizer) if tokenizer is not None else None)
+        # backend == "local": a *copy* of this model serves generation in-process
+        self._local_model = local_model
         self._proc: subprocess.Popen | None = None
         self._proxy: "OpenAIProxyServer | None" = None
+        self._local: "LocalInferenceServer | None" = None
         self.current_version: int = 0
 
     # ------------------------------------------------------------------
@@ -55,6 +67,57 @@ class RolloutEngine:
     # ------------------------------------------------------------------
 
     async def start(self):
+        cfg = self.rollout_config
+
+        if cfg.backend == "local":
+            await self._start_local()
+        else:
+            await self._start_vllm()
+
+        # Start the proxy server (in-process FastAPI)
+        from nano_areal.engine.proxy import OpenAIProxyServer
+        self._proxy = OpenAIProxyServer(
+            vllm_base_url=f"http://{cfg.host}:{cfg.port}/v1",
+            tokenizer=self.tokenizer,
+            host=cfg.host,
+            port=cfg.proxy_port,
+            model_name="default",
+            processor=self.processor,
+        )
+        await self._proxy.start()
+
+    async def _start_local(self):
+        from nano_areal.engine.local_server import (
+            LocalInferenceServer,
+            LocalServerConfig,
+        )
+
+        assert self._local_model is not None, "backend='local' needs local_model"
+        assert self.processor is not None
+        cfg = self.rollout_config
+        want = self.model_config.device
+        if want == "cuda" and not torch.cuda.is_available():
+            want = "cpu"
+        if want == "mps" and not torch.backends.mps.is_available():
+            want = "cpu"
+        dev = torch.device(want)
+        serve_model = copy.deepcopy(self._local_model).to(dev).eval()
+        serve_model.requires_grad_(False)
+        self._local = LocalInferenceServer(
+            serve_model,
+            self.processor,
+            LocalServerConfig(
+                host=cfg.host,
+                port=cfg.port,
+                model_name="default",
+                max_model_len=self.model_config.max_model_len,
+                default_max_tokens=cfg.max_new_tokens,
+            ),
+        )
+        await self._local.start()
+        await self._wait_for_server(timeout=30)
+
+    async def _start_vllm(self):
         cfg = self.rollout_config
         mcfg = self.model_config
 
@@ -90,17 +153,6 @@ class RolloutEngine:
         self._proc = subprocess.Popen(cmd, env=env)
         await self._wait_for_server()
 
-        # Start the proxy server (in-process FastAPI)
-        from nano_areal.engine.proxy import OpenAIProxyServer
-        self._proxy = OpenAIProxyServer(
-            vllm_base_url=f"http://{cfg.host}:{cfg.port}/v1",
-            tokenizer=self.tokenizer,
-            host=cfg.host,
-            port=cfg.proxy_port,
-            model_name="default",
-        )
-        await self._proxy.start()
-
     async def _wait_for_server(self, timeout: int = 120):
         import httpx
         url = f"http://{self.rollout_config.host}:{self.rollout_config.port}/health"
@@ -120,6 +172,9 @@ class RolloutEngine:
         if self._proxy:
             await self._proxy.stop()
             self._proxy = None
+        if self._local:
+            await self._local.stop()
+            self._local = None
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
             try:
@@ -147,6 +202,13 @@ class RolloutEngine:
         Updates current_version so new trajectories are tagged correctly.
         """
         self.current_version = new_version
+
+    def apply_weights(self, state_dict: dict, new_version: int):
+        """Copy backend: load merged trainer weights into the local server."""
+        if self._local is not None:
+            self._local.load_state_dict(state_dict, new_version)
+        self.current_version = new_version
+        logger.info(f"[local] weights updated -> v{new_version} ({len(state_dict)} tensors)")
 
     async def __aenter__(self):
         await self.start()

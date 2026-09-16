@@ -26,16 +26,27 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
 
+from nano_areal.engine.multimodal import PromptProcessor
 from nano_areal.engine.types import InteractionRecord, TrajectoryTensors
+
+# Request fields forwarded verbatim to the backend. Anything else the agent
+# sends (dsh extension fields, vendor params) is dropped rather than rejected.
+_PASSTHROUGH_FIELDS = (
+    "temperature", "max_tokens", "max_completion_tokens", "top_p", "stop", "seed",
+    "presence_penalty", "frequency_penalty", "response_format", "tools",
+    "tool_choice", "parallel_tool_calls", "reasoning_effort",
+)
+_EXTRA_BODY_FIELDS = ("top_k", "min_p", "repetition_penalty", "chat_template_kwargs", "thinking")
 
 
 # ---------------------------------------------------------------------------
@@ -76,9 +87,11 @@ class OpenAIProxyServer:
         host: str = "127.0.0.1",
         port: int = 8001,
         model_name: str = "default",
+        processor: PromptProcessor | None = None,
     ):
         self.vllm_base_url = vllm_base_url
         self.tokenizer = tokenizer
+        self.processor = processor or PromptProcessor(tokenizer)
         self.host = host
         self.port = port
         self.model_name = model_name
@@ -111,18 +124,18 @@ class OpenAIProxyServer:
             port=self.port,
             log_level="warning",
         )
-        server = uvicorn.Server(config)
-        self._server_task = asyncio.create_task(server.serve())
+        self._server = uvicorn.Server(config)
+        self._server_task = asyncio.create_task(self._server.serve())
         # Give the server a moment to bind
         await asyncio.sleep(0.5)
 
     async def stop(self):
         if self._server_task:
-            self._server_task.cancel()
+            self._server.should_exit = True
             try:
-                await self._server_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._server_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._server_task.cancel()
         if self._vllm:
             await self._vllm.close()
 
@@ -153,16 +166,9 @@ class OpenAIProxyServer:
     # Token capture helpers
     # ------------------------------------------------------------------
 
-    def _tokenize_messages(self, messages: list[dict]) -> list[int]:
+    def _tokenize_messages(self, messages: list[dict], tools: list[dict] | None = None) -> list[int]:
         """Tokenize a message list as prompt (add_generation_prompt=True)."""
-        try:
-            return self.tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True
-            )
-        except Exception:
-            # Fallback: plain concatenation
-            text = " ".join(m.get("content") or "" for m in messages)
-            return self.tokenizer(text, add_special_tokens=True).input_ids
+        return self.processor(messages, tools=tools).input_ids
 
     def _tokenize_text(self, text: str) -> list[int]:
         """Tokenize raw text without special tokens."""
@@ -202,7 +208,10 @@ class OpenAIProxyServer:
             self._key_to_session[api_key] = session_id
             return {"session_id": session_id, "api_key": api_key}
 
+        # "/chat/completions" is the un-prefixed form some SDKs (dsh's
+        # chat-completions protocol) build when base_url already ends in /v1.
         @app.post("/v1/chat/completions")
+        @app.post("/chat/completions")
         async def chat_completions(
             request: Request,
             authorization: str | None = Header(default=None),
@@ -210,6 +219,11 @@ class OpenAIProxyServer:
             session = self._require_session(authorization)
             body = await request.json()
             return await self._handle_chat_completion(body, session)
+
+        @app.get("/v1/models")
+        @app.get("/models")
+        async def models():
+            return {"object": "list", "data": [{"id": self.model_name, "object": "model"}]}
 
         @app.post("/rl/set_reward")
         async def set_reward(
@@ -246,18 +260,8 @@ class OpenAIProxyServer:
                 raise HTTPException(status_code=404, detail="Session not found")
 
             tensors = _build_trajectories(session, discount)
-            # Serialize tensors to lists for JSON transport
-            result = [
-                {
-                    "input_ids": t.input_ids.tolist(),
-                    "response_mask": t.response_mask.tolist(),
-                    "logprobs": t.logprobs.tolist(),
-                    "reward": t.reward,
-                    "stop_reason": t.stop_reason,
-                    "turn_id": t.turn_id,
-                }
-                for t in tensors
-            ]
+            # Serialize tensors for JSON transport (pixel patches as base64 fp16)
+            result = [t.to_json() for t in tensors]
             # Clean up session
             del self._sessions[session_id]
             del self._key_to_session[session.api_key]
@@ -267,50 +271,59 @@ class OpenAIProxyServer:
     # Core: intercept, tokenize, forward, capture
     # ------------------------------------------------------------------
 
-    async def _handle_chat_completion(
-        self, body: dict, session: ProxySession
-    ) -> JSONResponse:
+    async def _handle_chat_completion(self, body: dict, session: ProxySession):
         messages: list[dict] = body.get("messages", [])
+        tools = body.get("tools") or None
+        stream = bool(body.get("stream", False))
 
-        # 1. Tokenize prompt
-        prompt_ids = self._tokenize_messages(messages)
+        # 1. Tokenize prompt (text + image patches, exactly as the engine sees it)
+        prompt = self.processor(messages, tools=tools)
+        prompt_ids = prompt.input_ids
 
         # 2. Find parent (for multi-turn reward discount tree)
         parent_id = self._find_parent_id(messages, session)
         turn_id = session.interactions[parent_id].turn_id + 1 if parent_id else 0
 
-        # 3. Forward to vllm with logprobs enabled. `return_tokens_as_token_ids`
+        # 3. Forward to the backend with logprobs enabled. `return_tokens_as_token_ids`
         #    makes vllm report each logprob token as "token_id:<int>", giving
         #    exact sampled ids instead of a lossy re-tokenization of the text.
-        vllm_kwargs = {
+        #    Unknown agent-side fields (dsh extensions) are intentionally dropped.
+        vllm_kwargs: dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": body.get("temperature", 1.0),
-            "max_tokens": body.get("max_tokens", 1024),
-            "top_p": body.get("top_p", 1.0),
             "logprobs": True,
             "top_logprobs": 1,
             "extra_body": {"return_tokens_as_token_ids": True},
         }
-        if body.get("tools"):
-            vllm_kwargs["tools"] = body["tools"]
-            vllm_kwargs["tool_choice"] = body.get("tool_choice", "auto")
+        for k in _PASSTHROUGH_FIELDS:
+            if k in body and body[k] is not None:
+                vllm_kwargs[k] = body[k]
+        vllm_kwargs.setdefault("temperature", 1.0)
+        vllm_kwargs.setdefault("max_tokens", 1024)
+        for k in _EXTRA_BODY_FIELDS:
+            if k in body and body[k] is not None:
+                vllm_kwargs["extra_body"][k] = body[k]
+        if tools and "tool_choice" not in vllm_kwargs:
+            vllm_kwargs["tool_choice"] = "auto"
 
         response = await self._vllm.chat.completions.create(**vllm_kwargs)
 
         # 4. Capture output tokens and logprobs
         choice = response.choices[0]
         content = choice.message.content or ""
+        reasoning = _reasoning_of(choice.message)
         tool_calls_raw = choice.message.tool_calls or []
 
-        # Output text: combine content + serialized tool call args
+        # Output text: combine reasoning + content + serialized tool call args
         output_text = content
+        if reasoning:
+            output_text = f"<think>\n{reasoning}\n</think>\n{content}"
         if tool_calls_raw:
             tc_texts = [
                 f"{tc.function.name}({tc.function.arguments})"
                 for tc in tool_calls_raw
             ]
-            output_text = (content + " " + " ".join(tc_texts)).strip()
+            output_text = (output_text + " " + " ".join(tc_texts)).strip()
 
         output_ids, token_logprobs = _extract_sampled_tokens(choice)
         if not output_ids:
@@ -344,16 +357,80 @@ class OpenAIProxyServer:
             reward=None,
             messages=messages,
             response_content=content,
+            reasoning_content=reasoning,
             tool_calls=tool_calls_dict,
             parent_id=parent_id,
             stop_reason=choice.finish_reason or "stop",
             turn_id=turn_id,
+            pixel_values=prompt.pixel_values,
+            image_grid_thw=prompt.image_grid_thw,
+            images=prompt.images,
         )
         session.interactions[rid] = rec
         session._last_id = rid
 
-        # 8. Return standard ChatCompletion JSON to agent
-        return JSONResponse(content=response.model_dump())
+        # 8. Return standard ChatCompletion JSON (or an SSE stream) to the agent
+        payload = response.model_dump()
+        payload["choices"][0].pop("logprobs", None)
+        if reasoning:
+            payload["choices"][0]["message"]["reasoning_content"] = reasoning
+        if stream:
+            return StreamingResponse(
+                _sse_from_completion(payload), media_type="text/event-stream"
+            )
+        return JSONResponse(content=payload)
+
+
+def _reasoning_of(message) -> str:
+    """vllm/dsh expose thinking as `reasoning_content` (or `reasoning`) on the message."""
+    extra = getattr(message, "model_extra", None) or {}
+    for key in ("reasoning_content", "reasoning"):
+        val = extra.get(key) if key in extra else getattr(message, key, None)
+        if isinstance(val, str) and val:
+            return val
+    return ""
+
+
+def _sse_from_completion(payload: dict):
+    """
+    Emit a non-streaming ChatCompletion as an OpenAI-compatible SSE stream:
+    role chunk → reasoning chunk → content chunk → tool_calls chunk → finish → [DONE].
+    Generation itself is not incremental; this exists so streaming-only agents
+    (dsh) can talk to the proxy while capture stays exact.
+    """
+    choice = payload["choices"][0]
+    msg = choice["message"]
+    base = {
+        "id": payload.get("id"),
+        "object": "chat.completion.chunk",
+        "created": payload.get("created", int(time.time())),
+        "model": payload.get("model", "default"),
+    }
+
+    def chunk(delta: dict, finish: str | None = None) -> str:
+        d = {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        yield chunk({"role": "assistant", "content": ""})
+        if msg.get("reasoning_content"):
+            yield chunk({"reasoning_content": msg["reasoning_content"]})
+        if msg.get("content"):
+            yield chunk({"content": msg["content"]})
+        if msg.get("tool_calls"):
+            deltas = []
+            for i, tc in enumerate(msg["tool_calls"]):
+                deltas.append({
+                    "index": i, "id": tc.get("id"), "type": "function",
+                    "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                })
+            yield chunk({"tool_calls": deltas})
+        yield chunk({}, finish=choice.get("finish_reason") or "stop")
+        if payload.get("usage"):
+            yield f"data: {json.dumps({**base, 'choices': [], 'usage': payload['usage']})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return gen()
 
 
 def _extract_sampled_tokens(choice) -> tuple[list[int], list[float]]:
@@ -443,7 +520,7 @@ class OpenAIProxyClient:
     async def __aenter__(self):
         self._http = httpx.AsyncClient(
             base_url=self.proxy_base_url,
-            timeout=30.0,
+            timeout=120.0,
         )
         r = await self._http.post(
             "/rl/start_session",
@@ -468,20 +545,10 @@ class OpenAIProxyClient:
                     json={"session_id": self.session_id, "discount": self._discount},
                 )
                 r.raise_for_status()
-                import torch
-                self.trajectories = [
-                    TrajectoryTensors(
-                        input_ids=torch.tensor(t["input_ids"], dtype=torch.long),
-                        response_mask=torch.tensor(t["response_mask"], dtype=torch.float),
-                        logprobs=torch.tensor(t["logprobs"], dtype=torch.float),
-                        reward=t["reward"],
-                        stop_reason=t.get("stop_reason", "stop"),
-                        turn_id=t.get("turn_id", 0),
-                    )
-                    for t in r.json()
-                ]
-            except Exception:
-                pass
+                self.trajectories = [TrajectoryTensors.from_json(t) for t in r.json()]
+            except Exception as e:  # pragma: no cover - network failure path
+                import logging
+                logging.getLogger(__name__).warning(f"export_trajectories failed: {e}")
         if self._http:
             await self._http.aclose()
 

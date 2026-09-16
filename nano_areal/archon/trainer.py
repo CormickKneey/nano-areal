@@ -15,6 +15,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from nano_areal.archon.distill import (
+    DistillConfig,
+    TeacherScorer,
+    distill_loss,
+    groups_to_distill,
+    teacher_logprob_tensor,
+)
+from nano_areal.archon.lora import (
+    LoRAConfig,
+    apply_lora,
+    count_trainable,
+    merge_lora_state_dict,
+)
 from nano_areal.archon.losses import (
     RejectionSamplingConfig,
     group_normalize_advantages,
@@ -23,8 +36,8 @@ from nano_areal.archon.losses import (
 )
 
 if TYPE_CHECKING:
-    from nano_areal.config import TrainConfig
     from nano_areal.archon.model import Qwen35Model
+    from nano_areal.config import TrainConfig
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +65,9 @@ class Trajectory:
     behavior_logprobs: Tensor | None = None
     # Inference-engine finish reason; "length" marks a truncated response
     stop_reason: str = "stop"
+    # Multimodal prompt inputs (None for text-only)
+    pixel_values: Tensor | None = None      # [N_patches, D]
+    image_grid_thw: Tensor | None = None    # [N_img, 3]
 
     @property
     def is_truncated(self) -> bool:
@@ -153,6 +169,7 @@ class ArchonTrainer:
         model: "Qwen35Model",
         config: "TrainConfig",
         tokenizer,
+        teacher: TeacherScorer | None = None,
     ):
         self.config = config
         self.tokenizer = tokenizer
@@ -165,7 +182,28 @@ class ArchonTrainer:
         else:
             device_str = "cpu"
         self.device = torch.device(device_str)
-        self.dtype = torch.bfloat16
+        self.dtype = _resolve_dtype(config.dtype, self.device)
+
+        # Frozen reference model: a copy of the *base* weights (before LoRA),
+        # not wrapped — always a single copy.
+        self.ref_model = copy.deepcopy(model).to(self.device, dtype=self.dtype)
+        self.ref_model.requires_grad_(False)
+        self.ref_model.eval()
+
+        # Optional LoRA: freeze base weights, train adapters only
+        self.lora: LoRAConfig | None = None
+        if config.lora_rank > 0:
+            self.lora = LoRAConfig(
+                rank=config.lora_rank,
+                alpha=config.lora_alpha,
+                targets=tuple(config.lora_targets),
+                freeze_vision=True,
+            )
+            apply_lora(model, self.lora)
+        elif config.freeze_vision and model.visual is not None:
+            model.visual.requires_grad_(False)
+
+        model.set_gradient_checkpointing(config.gradient_checkpointing)
 
         # Move model to device
         self.model = model.to(self.device, dtype=self.dtype)
@@ -173,21 +211,26 @@ class ArchonTrainer:
         # FSDP2 wrapping (multi-GPU) or plain module (single GPU / macOS)
         self.model = self._maybe_wrap_fsdp(self.model)
 
-        # Frozen reference model (not wrapped — always single copy)
-        self.ref_model = copy.deepcopy(model).to(self.device, dtype=self.dtype)
-        self.ref_model.requires_grad_(False)
-        self.ref_model.eval()
-
         # torch.compile
         if config.compile:
             self.model = torch.compile(self.model, backend=config.compile_backend)
             self.ref_model = torch.compile(self.ref_model, backend=config.compile_backend)
 
+        trainable = [p for p in self.model.parameters() if p.requires_grad]
+        self.n_trainable, self.n_total = count_trainable(model)
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            trainable,
             lr=config.lr,
             weight_decay=config.weight_decay,
             fused=(self.device.type == "cuda"),  # fused only on CUDA
+        )
+
+        # Teacher distillation (AReaL mopd): off unless distill_coef > 0
+        self.teacher = teacher
+        self.distill = DistillConfig(
+            rl_coef=config.rl_coef,
+            distill_coef=config.distill_coef if teacher is not None else 0.0,
+            trigger_max_pass_rate=config.distill_trigger_max_pass_rate,
         )
 
         self._step = 0
@@ -202,11 +245,13 @@ class ArchonTrainer:
             return model  # single GPU: no FSDP needed
 
         try:
+            import functools
+
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
             from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
             from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-            from nano_areal.archon.model import TransformerBlock
-            import functools
+
+            from nano_areal.archon.model import DecoderLayer
 
             mp = MixedPrecision(
                 param_dtype=self.dtype,
@@ -215,7 +260,7 @@ class ArchonTrainer:
             )
             auto_wrap = functools.partial(
                 transformer_auto_wrap_policy,
-                transformer_layer_cls={TransformerBlock},
+                transformer_layer_cls={DecoderLayer},
             )
             model = FSDP(
                 model,
@@ -267,20 +312,66 @@ class ArchonTrainer:
     # Log-prob computation (with optional recompute for off-policy data)
     # ------------------------------------------------------------------
 
+    def _collate_images(
+        self, trajectories: list[Trajectory]
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """Concatenate per-trajectory pixel patches in batch order (image tokens are
+        consumed sequentially over the flattened batch, so order == batch order)."""
+        pv = [t.pixel_values for t in trajectories if t.pixel_values is not None and t.pixel_values.numel() > 0]
+        if not pv:
+            return None, None
+        grid = [t.image_grid_thw for t in trajectories if t.image_grid_thw is not None]
+        return (
+            torch.cat(pv).to(self.device, dtype=self.dtype),
+            torch.cat(grid).to(self.device),
+        )
+
     @torch.no_grad()
     def _compute_ref_log_probs(
         self,
         input_ids: Tensor,
         response_mask: Tensor,
+        pixel_values: Tensor | None = None,
+        image_grid_thw: Tensor | None = None,
     ) -> Tensor:
-        return self.ref_model.compute_log_probs(input_ids, response_mask)
+        return self.ref_model.compute_log_probs(
+            input_ids, response_mask, pixel_values=pixel_values, image_grid_thw=image_grid_thw
+        )
 
     def _compute_policy_log_probs(
         self,
         input_ids: Tensor,
         response_mask: Tensor,
+        pixel_values: Tensor | None = None,
+        image_grid_thw: Tensor | None = None,
     ) -> Tensor:
-        return self.model.compute_log_probs(input_ids, response_mask)
+        return self.model.compute_log_probs(
+            input_ids, response_mask, pixel_values=pixel_values, image_grid_thw=image_grid_thw
+        )
+
+    def _teacher_log_probs(
+        self,
+        trajectories: list[Trajectory],
+        seqs: list[Tensor],
+        rewards: Tensor,
+        group_ids: list[str],
+        T: int,
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """Teacher logprobs [B, T-1] and a row mask [B] for groups selected by the trigger."""
+        if self.teacher is None or not self.distill.enabled:
+            return None, None
+        selected = groups_to_distill(rewards.tolist(), group_ids, self.distill)
+        rows = torch.tensor([g in selected for g in group_ids], device=self.device)
+        if not bool(rows.any()):
+            return None, None
+        out = torch.zeros(len(trajectories), T - 1, device=self.device)
+        for i, (traj, ids) in enumerate(zip(trajectories, seqs)):
+            if not rows[i]:
+                continue
+            out[i] = teacher_logprob_tensor(
+                self.teacher, ids.cpu(), traj.pixel_values, traj.image_grid_thw, T, self.distill.clamp_teacher_min
+            ).to(self.device)
+        return out, rows
 
     # ------------------------------------------------------------------
     # Training step
@@ -297,6 +388,7 @@ class ArchonTrainer:
             masks.append(mask)
 
         input_ids, response_mask = self._pad_batch(seqs, masks)
+        pixel_values, image_grid_thw = self._collate_images(trajectories)
         rewards = torch.tensor(
             [t.reward for t in trajectories],
             dtype=torch.float32,
@@ -319,9 +411,13 @@ class ArchonTrainer:
             ]).to(self.device)[:, 1:]
 
         with torch.no_grad():
-            ref_log_probs = self._compute_ref_log_probs(input_ids, response_mask)
+            ref_log_probs = self._compute_ref_log_probs(
+                input_ids, response_mask, pixel_values, image_grid_thw
+            )
 
-        log_probs = self._compute_policy_log_probs(input_ids, response_mask)
+        log_probs = self._compute_policy_log_probs(
+            input_ids, response_mask, pixel_values, image_grid_thw
+        )
 
         # Proximal policy: with one mini-batch per update π_prox == π_θ at this
         # point, so reuse the training forward instead of a second pass.
@@ -329,7 +425,7 @@ class ArchonTrainer:
         if not self.config.reuse_train_logp:
             with torch.no_grad():
                 proximal_log_probs = self._compute_policy_log_probs(
-                    input_ids, response_mask
+                    input_ids, response_mask, pixel_values, image_grid_thw
                 )
 
         rejection = None
@@ -358,6 +454,21 @@ class ArchonTrainer:
             mask_truncated=self.config.mask_truncated,
         )
 
+        # Teacher distillation on the student's own tokens (mopd)
+        teacher_lp, distill_rows = self._teacher_log_probs(
+            trajectories, seqs, rewards, group_ids, input_ids.shape[1]
+        )
+        if teacher_lp is not None:
+            d_mask = response_mask[:, 1:] * distill_rows.float().unsqueeze(-1)
+            d_loss, d_stats = distill_loss(log_probs, teacher_lp, d_mask)
+            loss = self.distill.rl_coef * loss + self.distill.distill_coef * d_loss
+            stats.update(d_stats)
+            stats["loss"] = loss.item()
+        else:
+            stats["distill_loss"] = 0.0
+            stats["distill_frac"] = 0.0
+        stats["n_images"] = 0 if image_grid_thw is None else int(image_grid_thw.shape[0])
+
         # Gradient accumulation
         loss = loss / self.config.grad_accum_steps
         loss.backward()
@@ -367,7 +478,7 @@ class ArchonTrainer:
 
         if self._step % self.config.grad_accum_steps == 0:
             torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.config.grad_clip
+                [p for p in self.model.parameters() if p.requires_grad], self.config.grad_clip
             )
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -398,9 +509,22 @@ class ArchonTrainer:
             torch.load(f"{path}/optimizer.pt", map_location=self.device)
         )
 
-    def get_state_dict(self) -> dict:
-        """Return current policy weights (for awex weight sync)."""
+    def _raw_model(self) -> nn.Module:
         raw = getattr(self.model, "_orig_mod", self.model)
         if hasattr(raw, "module"):
             raw = raw.module
+        return raw
+
+    def get_state_dict(self) -> dict:
+        """Current policy weights for weight sync. LoRA adapters are merged into
+        the base weights so the inference engine loads plain dense tensors."""
+        raw = self._raw_model()
+        if self.lora is not None:
+            return {k: v.cpu() for k, v in merge_lora_state_dict(raw).items()}
         return {k: v.cpu() for k, v in raw.state_dict().items()}
+
+
+def _resolve_dtype(name: str, device: torch.device) -> torch.dtype:
+    if name == "auto":
+        return torch.bfloat16 if device.type == "cuda" else torch.float32
+    return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[name]

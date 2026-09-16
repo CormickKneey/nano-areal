@@ -184,7 +184,6 @@ class HTMLDashboard:
 
         # Build dropdown steps with conversation HTML
         buttons = []
-        all_annotations = []
 
         for i, rec in enumerate(self.records):
             conv_html = _render_conversation_html(rec.conversation)

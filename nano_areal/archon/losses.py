@@ -250,3 +250,34 @@ def kl_penalty(
         kl = -diff  # k1: log(π_θ / π_ref)
     kl = kl * loss_mask
     return kl, kl.sum() / loss_mask.sum().clamp(min=1)
+
+
+# ---------------------------------------------------------------------------
+# Turn-level GAE (AReaL #1600) — one "step" per LLM call of a multi-turn episode
+# ---------------------------------------------------------------------------
+
+def turn_level_gae(
+    turn_rewards: list[float],
+    turn_values: list[float] | None = None,
+    gamma: float = 1.0,
+    lam: float = 1.0,
+) -> list[float]:
+    """
+    Generalised advantage estimation over the turns of one episode.
+
+    ``turn_rewards[t]`` is the reward received after turn t; ``turn_values[t]``
+    an (optional) value estimate for the state before turn t — with no critic
+    every value is 0 and the result reduces to discounted returns-to-go, which
+    is what the proxy's geometric reward discount approximates. With
+    ``gamma = lam = 1`` and zero values every turn gets the episode return.
+    """
+    T = len(turn_rewards)
+    values = list(turn_values) if turn_values is not None else [0.0] * T
+    values.append(0.0)
+    adv = [0.0] * T
+    last = 0.0
+    for t in reversed(range(T)):
+        delta = turn_rewards[t] + gamma * values[t + 1] - values[t]
+        last = delta + gamma * lam * last
+        adv[t] = last
+    return adv

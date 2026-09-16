@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import types
+
 import torch
 
 # ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def test_trainer_step():
         print(f"  step {step}: loss={stats['loss']:.4f} kl={stats['kl']:.4f} "
               f"reward_mean={stats['reward_mean']:.2f}")
 
-    assert all(torch.isfinite(torch.tensor(l)) for l in losses), "Some losses are not finite"
+    assert all(torch.isfinite(torch.tensor(ls)) for ls in losses), "Some losses are not finite"
     print("  [PASS] trainer_step: all losses finite, gradients OK")
 
 
@@ -126,6 +127,7 @@ def test_trainer_step():
 
 def test_buffer():
     import asyncio
+
     from nano_areal.engine.buffer import AsyncTrajectoryBuffer
 
     async def _run():
@@ -186,23 +188,32 @@ def test_bfcl_reward():
 # ---------------------------------------------------------------------------
 
 def test_state_dict_keys():
-    from nano_areal.archon.state_dict import hf_key_to_archon, archon_key_to_hf
+    from nano_areal.archon.state_dict import archon_key_to_hf, hf_key_to_archon
 
+    # Text keys go under `language_model.*` (Qwen3_5ForConditionalGeneration
+    # layout); `model.` alone is the dense Qwen3ForCausalLM alias.
     pairs = [
-        ("model.embed_tokens.weight",                    "embed_tokens.weight"),
-        ("model.layers.3.self_attn.q_proj.weight",       "layers.3.attn.q_proj.weight"),
-        ("model.layers.3.self_attn.q_proj.bias",         "layers.3.attn.q_proj.bias"),
-        ("model.layers.0.mlp.gate_proj.weight",          "layers.0.mlp.gate_proj.weight"),
-        ("model.layers.0.input_layernorm.weight",        "layers.0.input_layernorm.weight"),
-        ("model.norm.weight",                            "norm.weight"),
-        ("lm_head.weight",                               "lm_head.weight"),
+        ("model.language_model.embed_tokens.weight",         "language_model.embed_tokens.weight"),
+        ("model.language_model.layers.3.self_attn.q_proj.weight",
+         "language_model.layers.3.self_attn.q_proj.weight"),
+        ("model.language_model.layers.0.input_layernorm.weight",
+         "language_model.layers.0.input_layernorm.weight"),
+        ("model.embed_tokens.weight",                        "language_model.embed_tokens.weight"),
+        ("model.layers.3.self_attn.q_proj.weight",           "language_model.layers.3.self_attn.q_proj.weight"),
+        ("model.norm.weight",                                "language_model.norm.weight"),
+        ("model.visual.merger.linear_fc1.weight",            "visual.merger.linear_fc1.weight"),
+        ("lm_head.weight",                                   "lm_head.weight"),
     ]
 
     for hf_key, expected_archon in pairs:
         got = hf_key_to_archon(hf_key)
         assert got == expected_archon, f"HF→archon: {hf_key!r} → {got!r} (expected {expected_archon!r})"
         rev = archon_key_to_hf(expected_archon)
+        if hf_key.startswith("model.") and not hf_key.startswith(("model.language_model.", "model.visual.")):
+            hf_key = "model.language_model." + hf_key[len("model."):]
         assert rev == hf_key, f"archon→HF: {expected_archon!r} → {rev!r} (expected {hf_key!r})"
+
+    assert hf_key_to_archon("model.mtp.layers.0.eh_proj.weight") is None
 
     print(f"  [PASS] state_dict: {len(pairs)} key pairs round-trip correctly")
 
@@ -217,7 +228,10 @@ def test_state_dict_keys():
 
 def test_proxy_session():
     import asyncio
-    from nano_areal.engine.proxy import OpenAIProxyServer, _build_trajectories, ADMIN_KEY
+
+    from nano_areal.engine.proxy import (
+        _build_trajectories,
+    )
     from nano_areal.engine.types import InteractionRecord
 
     async def _run():
@@ -278,7 +292,8 @@ def test_proxy_session():
         assert abs(reward_map["r2"] - 1.0) < 1e-5, f"r2 reward={reward_map['r2']}"
         assert abs(reward_map["r1"] - 0.9) < 1e-5, f"r1 reward={reward_map['r1']}"
         assert abs(reward_map["r0"] - 0.81) < 1e-5, f"r0 reward={reward_map['r0']}"
-        print(f"  [PASS] proxy_session: reward backprop r0={reward_map['r0']:.2f} r1={reward_map['r1']:.2f} r2={reward_map['r2']:.2f}")
+        print(f"  [PASS] proxy_session: reward backprop r0={reward_map['r0']:.2f} "
+              f"r1={reward_map['r1']:.2f} r2={reward_map['r2']:.2f}")
 
     asyncio.run(_run())
 
