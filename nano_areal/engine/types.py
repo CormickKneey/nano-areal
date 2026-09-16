@@ -42,6 +42,16 @@ class InteractionRecord:
     # Parent interaction_id for multi-turn reward discount
     parent_id: str | None = None
 
+    # vllm finish_reason: "stop" | "length" | "tool_calls" | "abort" | ...
+    stop_reason: str = "stop"
+
+    # Depth in the conversation tree (0 = first LLM call of the episode)
+    turn_id: int = 0
+
+    @property
+    def is_truncated(self) -> bool:
+        return self.stop_reason == "length"
+
     def to_trajectory(self) -> "TrajectoryTensors":
         """Convert to tensor format for the trainer."""
         T = len(self.input_ids)
@@ -61,6 +71,8 @@ class InteractionRecord:
             response_mask=response_mask,
             logprobs=logprobs_tensor,
             reward=self.reward or 0.0,
+            stop_reason=self.stop_reason,
+            turn_id=self.turn_id,
         )
 
 
@@ -69,5 +81,13 @@ class TrajectoryTensors:
     """Ready-for-training tensors from one interaction."""
     input_ids: torch.Tensor      # [T]
     response_mask: torch.Tensor  # [T]  float, 0/1
-    logprobs: torch.Tensor       # [T]  log probs (0 at prompt positions)
+    logprobs: torch.Tensor       # [T]  behavior log probs (0 at prompt positions)
     reward: float
+    stop_reason: str = "stop"
+    turn_id: int = 0
+    # Set by the rollout worker: all episodes of one prompt share a group_id
+    group_id: str = ""
+
+    @property
+    def is_truncated(self) -> bool:
+        return self.stop_reason == "length"

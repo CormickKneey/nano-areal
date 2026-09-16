@@ -19,6 +19,7 @@ import os
 import signal
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import torch
@@ -71,9 +72,12 @@ async def rollout_worker(
             break
 
         sample = batch[0]
+        group_id = uuid.uuid4().hex
 
-        # Run G episodes concurrently for the same sample
-        tasks = [workflow.arun_episode(sample) for _ in range(group_size)]
+        # Run G episodes concurrently for the same sample (one GRPO group)
+        tasks = [
+            workflow.arun_episode(sample, group_id=group_id) for _ in range(group_size)
+        ]
         try:
             groups: list = await asyncio.gather(*tasks, return_exceptions=True)
         except asyncio.CancelledError:
@@ -91,6 +95,12 @@ async def rollout_worker(
                     response_mask=tt.response_mask,
                     reward=tt.reward,
                     policy_version=engine.current_version,
+                    # Multi-turn episodes yield one trajectory per LLM call;
+                    # group by (prompt, turn) so turn-0 samples are compared
+                    # with turn-0 samples, etc.
+                    group_id=f"{group_id}:{tt.turn_id}",
+                    behavior_logprobs=tt.logprobs,
+                    stop_reason=tt.stop_reason,
                 )
                 await buffer.put(traj)
 
@@ -120,13 +130,13 @@ async def train_worker(
         if stop_event.is_set():
             break
 
-        # Collect a batch of trajectories
+        # Collect a batch of trajectories: batch_size prompts x group_size
+        # episodes, so grouped advantage normalization sees whole groups.
+        n = config.train.batch_size * config.rollout.group_size
         if sync_mode:
-            batch = await buffer.get_batch_sync(config.train.batch_size)
+            batch = await buffer.get_batch_sync(n)
         else:
-            batch = await buffer.get_batch(
-                n=config.train.batch_size * config.rollout.group_size
-            )
+            batch = await buffer.get_batch(n=n)
 
         if not batch:
             await asyncio.sleep(0.1)
@@ -156,7 +166,11 @@ async def train_worker(
             logger.info(
                 f"step={step} policy_v={trainer.policy_version} "
                 f"loss={stats['loss']:.4f} reward={stats['reward_mean']:.3f} "
-                f"kl={stats['kl']:.4f} buffer={buffer.qsize}"
+                f"kl={stats['kl']:.4f} clip={stats['clip_frac']:.3f} "
+                f"rejected={stats['rejected_frac']:.3f} "
+                f"truncated={stats['truncated_frac']:.2f} "
+                f"incomplete_groups={stats['n_incomplete_groups']} "
+                f"buffer={buffer.qsize}"
             )
 
         if step % config.eval_every_steps == 0:
@@ -354,6 +368,27 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--max-offpolicy", type=int, default=4)
+    parser.add_argument(
+        "--loss", default="grpo", choices=["grpo", "dr_grpo", "cispo", "gspo"]
+    )
+    parser.add_argument(
+        "--adv-norm", default="grouped", choices=["grouped", "batch", "none"]
+    )
+    parser.add_argument("--kl-type", default="k1", choices=["k1", "k3"])
+    parser.add_argument(
+        "--clip-eps-high",
+        type=float,
+        default=None,
+        help="DAPO asymmetric upper clip (default: same as clip_eps)",
+    )
+    parser.add_argument(
+        "--behav-imp-weight-cap",
+        type=float,
+        default=5.0,
+        help="Rejection-sampling cap on pi_prox/pi_behave; <=0 disables",
+    )
+    parser.add_argument("--mask-truncated", action="store_true",
+                        help="Zero advantage of responses cut off by max_tokens")
     parser.add_argument("--log-dir", default="logs")
     parser.add_argument("--save-dir", default="checkpoints")
     parser.add_argument(
@@ -379,6 +414,14 @@ def main():
     config.train.batch_size = args.batch_size
     config.train.lr = args.lr
     config.async_rl.max_head_offpolicyness = args.max_offpolicy
+    config.train.loss_type = args.loss
+    config.train.adv_norm = args.adv_norm
+    config.train.kl_type = args.kl_type
+    config.train.clip_eps_high = args.clip_eps_high
+    config.train.behav_imp_weight_cap = (
+        args.behav_imp_weight_cap if args.behav_imp_weight_cap > 0 else None
+    )
+    config.train.mask_truncated = args.mask_truncated
     config.log_dir = args.log_dir
     config.save_dir = args.save_dir
     if args.bfcl_data_dir:

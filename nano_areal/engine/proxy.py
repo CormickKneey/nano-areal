@@ -253,6 +253,8 @@ class OpenAIProxyServer:
                     "response_mask": t.response_mask.tolist(),
                     "logprobs": t.logprobs.tolist(),
                     "reward": t.reward,
+                    "stop_reason": t.stop_reason,
+                    "turn_id": t.turn_id,
                 }
                 for t in tensors
             ]
@@ -275,8 +277,11 @@ class OpenAIProxyServer:
 
         # 2. Find parent (for multi-turn reward discount tree)
         parent_id = self._find_parent_id(messages, session)
+        turn_id = session.interactions[parent_id].turn_id + 1 if parent_id else 0
 
-        # 3. Forward to vllm with logprobs enabled
+        # 3. Forward to vllm with logprobs enabled. `return_tokens_as_token_ids`
+        #    makes vllm report each logprob token as "token_id:<int>", giving
+        #    exact sampled ids instead of a lossy re-tokenization of the text.
         vllm_kwargs = {
             "model": self.model_name,
             "messages": messages,
@@ -285,6 +290,7 @@ class OpenAIProxyServer:
             "top_p": body.get("top_p", 1.0),
             "logprobs": True,
             "top_logprobs": 1,
+            "extra_body": {"return_tokens_as_token_ids": True},
         }
         if body.get("tools"):
             vllm_kwargs["tools"] = body["tools"]
@@ -306,16 +312,13 @@ class OpenAIProxyServer:
             ]
             output_text = (content + " " + " ".join(tc_texts)).strip()
 
-        output_ids = self._tokenize_text(output_text) if output_text else []
-
-        # Extract per-token logprobs from vllm response
-        token_logprobs: list[float] = []
-        if choice.logprobs and choice.logprobs.content:
-            token_logprobs = [lp.logprob for lp in choice.logprobs.content]
-        # Pad/trim logprobs to match output_ids length
-        if len(token_logprobs) < len(output_ids):
-            token_logprobs += [0.0] * (len(output_ids) - len(token_logprobs))
-        token_logprobs = token_logprobs[: len(output_ids)]
+        output_ids, token_logprobs = _extract_sampled_tokens(choice)
+        if not output_ids:
+            # Backend did not honour return_tokens_as_token_ids: re-tokenize text
+            output_ids = self._tokenize_text(output_text) if output_text else []
+            if len(token_logprobs) < len(output_ids):
+                token_logprobs += [0.0] * (len(output_ids) - len(token_logprobs))
+            token_logprobs = token_logprobs[: len(output_ids)]
 
         # 5. Build full sequence: prompt + output
         full_ids = prompt_ids + output_ids
@@ -343,12 +346,35 @@ class OpenAIProxyServer:
             response_content=content,
             tool_calls=tool_calls_dict,
             parent_id=parent_id,
+            stop_reason=choice.finish_reason or "stop",
+            turn_id=turn_id,
         )
         session.interactions[rid] = rec
         session._last_id = rid
 
         # 8. Return standard ChatCompletion JSON to agent
         return JSONResponse(content=response.model_dump())
+
+
+def _extract_sampled_tokens(choice) -> tuple[list[int], list[float]]:
+    """
+    Read (token_ids, logprobs) from a vllm choice served with
+    `return_tokens_as_token_ids`. Returns ([], logprobs) when tokens are
+    plain strings so the caller can fall back to re-tokenization.
+    """
+    if not (choice.logprobs and choice.logprobs.content):
+        return [], []
+    lps: list[float] = [lp.logprob for lp in choice.logprobs.content]
+    ids: list[int] = []
+    for lp in choice.logprobs.content:
+        tok = lp.token or ""
+        if not tok.startswith("token_id:"):
+            return [], lps
+        try:
+            ids.append(int(tok[len("token_id:"):]))
+        except ValueError:
+            return [], lps
+    return ids, lps
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +475,8 @@ class OpenAIProxyClient:
                         response_mask=torch.tensor(t["response_mask"], dtype=torch.float),
                         logprobs=torch.tensor(t["logprobs"], dtype=torch.float),
                         reward=t["reward"],
+                        stop_reason=t.get("stop_reason", "stop"),
+                        turn_id=t.get("turn_id", 0),
                     )
                     for t in r.json()
                 ]
@@ -513,7 +541,9 @@ class OpenAIProxyWorkflow:
         self.proxy_server = proxy_server
         self.turn_discount = turn_discount
 
-    async def arun_episode(self, data: Any) -> list[TrajectoryTensors]:
+    async def arun_episode(
+        self, data: Any, group_id: str = ""
+    ) -> list[TrajectoryTensors]:
         client = OpenAIProxyClient(self.proxy_server.base_url)
         async with client as session:
             # Shared httpx client for lower latency (avoids per-call TCP handshake)
@@ -533,4 +563,6 @@ class OpenAIProxyWorkflow:
 
             await session.set_rewards(rewards, discount=self.turn_discount)
 
+        for t in client.trajectories:
+            t.group_id = group_id
         return client.trajectories

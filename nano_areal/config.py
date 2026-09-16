@@ -50,10 +50,23 @@ class TrainConfig:
     weight_decay: float = 0.01
     grad_clip: float = 1.0
 
-    # GRPO
+    # Policy-gradient objective (see nano_areal/archon/losses.py)
+    loss_type: Literal["grpo", "dr_grpo", "cispo", "gspo"] = "grpo"
+    adv_norm: Literal["grouped", "batch", "none"] = "grouped"
     kl_coef: float = 0.01
+    kl_type: Literal["k1", "k3"] = "k1"
     clip_eps: float = 0.2
+    clip_eps_high: float | None = None   # DAPO asymmetric upper clip; None = clip_eps
     recompute_logprobs: bool = True   # required for off-policy data
+
+    # Decoupled PPO: reuse the training forward as π_prox (one mini-batch per
+    # update) instead of a separate no-grad pass.
+    reuse_train_logp: bool = True
+    # Rejection sampling on staleness weight π_prox/π_behave. None disables.
+    behav_imp_weight_cap: float | None = 5.0
+    rejection_action: Literal["mask", "clamp"] = "mask"
+    # Zero the advantage of responses cut off by max_tokens (stop_reason == "length")
+    mask_truncated: bool = False
 
     # Batch
     batch_size: int = 4               # problems consumed per train step
