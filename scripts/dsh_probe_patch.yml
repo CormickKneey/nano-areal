@@ -1,0 +1,5 @@
+# Cordis patch for the dsh prompt probe: route the DeepSeek adapter over the
+# OpenAI-style Chat Completions protocol (what nano-areal's proxy speaks).
+- id: llm-deepseek
+  config:
+    protocol: chat-completions

@@ -19,7 +19,6 @@ from nano_areal.agent.base import AgentBase
 from nano_areal.dataset import BFCLSample, build_system_prompt
 from nano_areal.reward.bfcl import BFCLReward, parse_tool_calls
 
-
 # ---------------------------------------------------------------------------
 # Simulated BFCL tool execution environment
 # ---------------------------------------------------------------------------

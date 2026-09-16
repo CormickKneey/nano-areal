@@ -5,7 +5,6 @@ import json
 import re
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Normalization helpers (mirrors BFCL official eval logic)
 # ---------------------------------------------------------------------------

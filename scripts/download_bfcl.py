@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from urllib.request import urlopen, Request
 from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 GORILLA_RAW = (
     "https://raw.githubusercontent.com/ShishirPatil/gorilla/main"
@@ -76,7 +76,7 @@ def download_category(category: str, data_dir: Path, verbose: bool = True) -> in
         data = _fetch(url)
         if data:
             dest.write_bytes(data)
-            n = len([l for l in data.decode().splitlines() if l.strip()])
+            n = len([ln for ln in data.decode().splitlines() if ln.strip()])
             if verbose:
                 print(f"  ok    {fname}  ({n} samples)")
             count += 1

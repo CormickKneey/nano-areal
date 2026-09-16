@@ -158,7 +158,8 @@ nano_areal/
 ├── archon/
 │   ├── model.py         纯 PyTorch 实现的 Qwen3（RoPE、GQA、QK-norm、SwiGLU）
 │   ├── state_dict.py    HuggingFace ↔ archon 权重键映射
-│   └── trainer.py       GRPO 损失 + FSDP2 + torch.compile
+│   ├── losses.py        分组优势 / 拒绝采样 / GRPO·Dr.GRPO·CISPO·GSPO / KL
+│   └── trainer.py       训练步（decoupled logprob）+ FSDP2 + torch.compile
 │
 ├── sync/awex_bridge.py  awex NCCL 权重同步（macOS 使用 copy 回退）
 └── viz/
@@ -168,7 +169,10 @@ nano_areal/
 train.py                 入口点
 scripts/
 ├── download_bfcl.py     从 gorilla GitHub 获取 BFCL-V4
+├── probe_dsh_prompt.py  探针：dsh 智能体每轮 prompt token 数（定 max_model_len）
+├── probe_train_memory.py 探针：训练侧峰值显存 vs 序列长度
 └── test_sync.py         单元测试（GRPO、缓冲区、奖励、state_dict）
+tests/                   pytest：损失函数、代理 token 捕获
 ```
 
 ---
@@ -176,20 +180,23 @@ scripts/
 ## 10 行代码理解 GRPO
 
 ```python
-# 组归一化奖励 → 优势
-advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+# 同一 prompt 的 G 条轨迹为一组：组内归一化奖励 → 优势（不完整组 / 零方差组 → 0）
+advantages = group_normalize_advantages(rewards, group_ids)
 
-# PPO-clip 目标
-ratio = (log_probs - ref_log_probs).exp()
+# PPO-clip 目标，ratio 以 π_prox（训练开始时的策略）为锚，而不是参考模型
+ratio = (log_probs - proximal_log_probs).exp()
 pg_loss = -torch.min(ratio * adv, ratio.clamp(1-ε, 1+ε) * adv)
 
+# 拒绝采样：π_prox / π_behave 超过上限的过时 token 不参与 loss
 # KL 惩罚使策略接近参考模型
 kl = (log_probs - ref_log_probs) * mask
 
 loss = ((pg_loss + β * kl) * mask).sum() / mask.sum()
 ```
 
-Log-probs 在训练时**重新计算** —— 这是必需的，因为采样数据是 off-policy 的。
+三种 log-prob：`behavior`（vllm 采样时返回）、`proximal`（训练开始时重算，默认复用训练前向 `reuse_train_logp`）、`ref`（冻结参考模型）。
+可切换 loss：`--loss grpo|dr_grpo|cispo|gspo`；`--mask-truncated` 将被 `max_tokens` 截断的回复优势置零；`--behav-imp-weight-cap` 控制拒绝采样上限。
+对齐 AReaL 的 decoupled PPO、分组归一化与拒绝采样，详见 `nano_areal/archon/losses.py` 与 `docs/v0.2-plan.md`。
 
 ---
 

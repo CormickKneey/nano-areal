@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.29",
     "huggingface-hub>=0.22",
     "modelscope>=1.14",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
@@ -30,14 +31,21 @@ gpu = [
 metal = [
     "vllm-metal",
 ]
-dev = ["pytest", "ruff"]
+# Chart-to-code task (renders candidate matplotlib code for the SSIM reward)
+chart = ["matplotlib>=3.8"]
+# DeepSeek Harness agent (real SDK; the builtin tool loop needs nothing extra)
+dsh = ["deepseek-harness-sdk"]
+dev = ["pytest", "ruff", "matplotlib>=3.8"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.ruff]
+line-length = 120
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
 [tool.uv]
-dev-dependencies = ["pytest", "ruff"]
+dev-dependencies = ["pytest", "ruff", "matplotlib>=3.8"]

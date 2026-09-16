@@ -8,12 +8,14 @@ from nano_areal.dataset import DatasetConfig
 
 @dataclass
 class ModelConfig:
-    model_name: str = "Qwen/Qwen3-0.6B"
+    model_name: str = "Qwen/Qwen3.5-2B"
     # Tokenizer defaults to model_name if not set
     tokenizer_name: str = ""
     max_model_len: int = 4096
     dtype: str = "bfloat16"  # bfloat16 / float16 / float32
     device: str = "cuda"     # cuda / mps / cpu
+    # Drop the vision tower (text-only tasks; saves ~0.4B params of memory)
+    text_only: bool = False
 
     def __post_init__(self):
         if not self.tokenizer_name:
@@ -33,6 +35,10 @@ class RolloutConfig:
     top_p: float = 0.95
     max_new_tokens: int = 1024
 
+    # Inference backend: "vllm" (subprocess, CUDA / vllm-metal) or "local"
+    # (in-process nano-archon generator; CPU/MPS, no vllm needed)
+    backend: Literal["vllm", "local"] = "vllm"
+
     # vllm server
     host: str = "127.0.0.1"
     port: int = 8000
@@ -50,10 +56,49 @@ class TrainConfig:
     weight_decay: float = 0.01
     grad_clip: float = 1.0
 
-    # GRPO
+    # Policy-gradient objective (see nano_areal/archon/losses.py)
+    loss_type: Literal["grpo", "dr_grpo", "cispo", "gspo"] = "grpo"
+    adv_norm: Literal["grouped", "batch", "none"] = "grouped"
     kl_coef: float = 0.01
+    kl_type: Literal["k1", "k3"] = "k1"
     clip_eps: float = 0.2
+    clip_eps_high: float | None = None   # DAPO asymmetric upper clip; None = clip_eps
     recompute_logprobs: bool = True   # required for off-policy data
+
+    # Decoupled PPO: reuse the training forward as π_prox (one mini-batch per
+    # update) instead of a separate no-grad pass.
+    reuse_train_logp: bool = True
+    # Rejection sampling on staleness weight π_prox/π_behave. None disables.
+    behav_imp_weight_cap: float | None = 5.0
+    rejection_action: Literal["mask", "clamp"] = "mask"
+    # Zero the advantage of responses cut off by max_tokens (stop_reason == "length")
+    mask_truncated: bool = False
+
+    # Model precision on the trainer device: bfloat16 / float16 / float32 / auto
+    # (auto = bf16 on CUDA, fp32 elsewhere)
+    dtype: str = "auto"
+
+    # LoRA (rank 0 = full fine-tuning). Adapters are merged before weight sync.
+    lora_rank: int = 0
+    lora_alpha: float = 32.0
+    lora_targets: list[str] = field(default_factory=lambda: [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "in_proj_qkv", "in_proj_z", "out_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ])
+    freeze_vision: bool = True
+
+    # Teacher distillation (AReaL mopd): loss = rl_coef * L_rl + distill_coef * L_distill
+    rl_coef: float = 1.0
+    distill_coef: float = 0.0
+    # Only distill groups whose pass rate is <= this value (1.0 = every group)
+    distill_trigger_max_pass_rate: float = 1.0
+    # Teacher: "none" | "local:<path>" (nano-archon in-process) | "http://host:port/v1"
+    teacher: str = "none"
+    teacher_model_name: str = "default"
+
+    # Process reward shaping weight (0 disables; see nano_areal/reward/prm.py)
+    prm_weight: float = 0.0
 
     # Batch
     batch_size: int = 4               # problems consumed per train step
@@ -93,6 +138,11 @@ class NanoArealConfig:
     weight_sync: WeightSyncConfig = field(default_factory=WeightSyncConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
 
+    # Task: which agent / dataset / reward triple to run (see nano_areal/tasks.py)
+    task: Literal["bfcl", "clevr", "geometry3k", "nano_swe", "chart", "dsh"] = "bfcl"
+    task_data: str = ""                 # dataset path / HF id / builtin (task-specific)
+    task_limit: int = 0                 # 0 = whole dataset
+
     # Cluster mode
     mode: Literal["async", "sync"] = "async"
 
@@ -101,6 +151,7 @@ class NanoArealConfig:
     save_dir: str = "checkpoints"
     save_every_steps: int = 100
     eval_every_steps: int = 50
+    log_every_steps: int = 10
 
     @classmethod
     def for_macos(cls) -> "NanoArealConfig":
@@ -115,6 +166,25 @@ class NanoArealConfig:
         cfg.weight_sync.backend = "copy"
         cfg.rollout.group_size = 4
         cfg.train.batch_size = 2
+        cfg.train.lora_rank = 16
+        cfg.model.max_model_len = 8192
+        return cfg
+
+    @classmethod
+    def for_cpu_smoke(cls) -> "NanoArealConfig":
+        """Everything in one process on CPU: local archon server + tiny model."""
+        cfg = cls.for_macos()
+        cfg.model.device = "cpu"
+        cfg.model.dtype = "float32"
+        cfg.rollout.backend = "local"
+        cfg.rollout.group_size = 2
+        cfg.rollout.max_new_tokens = 16
+        cfg.train.batch_size = 1
+        cfg.train.lora_rank = 0
+        cfg.train.gradient_checkpointing = False
+        cfg.train.behav_imp_weight_cap = None
+        cfg.model.max_model_len = 512
+        cfg.log_every_steps = 1
         return cfg
 
     @classmethod

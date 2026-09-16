@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-
 # ---------------------------------------------------------------------------
 # Data directory resolution
 # ---------------------------------------------------------------------------
@@ -183,10 +182,10 @@ class BFCLDataset:
 
         if missing:
             raise FileNotFoundError(
-                f"BFCL data files not found:\n"
+                "BFCL data files not found:\n"
                 + "\n".join(f"  {p}" for p in missing)
-                + f"\n\nRun:  uv run python scripts/download_bfcl.py"
-                + (f"\n      or set BFCL_DATA_DIR to an existing data directory" if not missing else "")
+                + "\n\nRun:  uv run python scripts/download_bfcl.py"
+                + ("\n      or set BFCL_DATA_DIR to an existing data directory" if not missing else "")
             )
 
         if self.config.max_samples > 0:
