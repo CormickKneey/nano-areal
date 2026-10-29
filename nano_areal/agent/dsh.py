@@ -104,12 +104,17 @@ class DshAgent(AgentBase):
         provider: str = "deepseek-official",
         context_window_tokens: int = 8192,
         max_output_tokens: int = 1024,
+        patches: tuple[str, ...] = (),
+        timeout_seconds: float = 600.0,
     ):
         self.model_name = model_name
         self.profile = profile
         self.provider = provider
         self.context_window_tokens = context_window_tokens
         self.max_output_tokens = max_output_tokens
+        self.patches = patches
+        self.timeout_seconds = timeout_seconds
+        self.last_result: dict = {}
 
     async def run(self, data: Any, **extra_kwargs) -> float:
         base_url = extra_kwargs["base_url"]
@@ -148,10 +153,27 @@ class DshAgent(AgentBase):
                 max_tokens=self.max_output_tokens,
                 context_window_tokens=self.context_window_tokens,
             )
+            kwargs.update(
+                patches=self.patches,
+                request_timeout_seconds=self.timeout_seconds,
+            )
             with DeepSeekHarness(**kwargs) as harness:
                 result = harness.run(prompt)
-            preset = data.get("reward") if isinstance(data, dict) else None
-            verified = float(preset) if preset is not None else hidden_test_pass_rate(Path(kwargs["cwd"]))
+            hidden_dir = data.get("hidden_test_dir") if isinstance(data, dict) else None
+            if hidden_dir:
+                from nano_areal.reward.dsh_task import external_test_pass_rate
+
+                verified = external_test_pass_rate(
+                    workspace, Path(hidden_dir), result.final_response,
+                )
+            else:
+                preset = data.get("reward") if isinstance(data, dict) else None
+                verified = float(preset) if preset is not None else hidden_test_pass_rate(Path(kwargs["cwd"]))
+            self.last_result = {
+                "finish_reason": result.finish_reason,
+                "verified_reward": verified,
+                "response": result.final_response,
+            }
             return episode_reward(result.finish_reason, verified)
         finally:
             home_cm.cleanup()

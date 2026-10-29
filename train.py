@@ -183,6 +183,13 @@ async def train_worker(
 # ---------------------------------------------------------------------------
 
 async def main_async(config: NanoArealConfig, model_source: str = "modelscope"):
+    if config.agent == "dsh" and config.backend == "metal":
+        raise NotImplementedError(
+            "The custom archon Qwen3-VL port is not ready. Run the real MLX / "
+            "HF-LoRA fallback with: PYTHONPATH=. .venv/bin/python "
+            "scripts/run_agentic_rl.py --backend metal --sync --agent dsh "
+            "--loss grpo --steps 1"
+        )
     # ------------------------------------------------------------------
     # Build components
     # ------------------------------------------------------------------

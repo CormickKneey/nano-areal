@@ -1,5 +1,11 @@
 # S1 Mac probe notes
 
+> Follow-up on 2026-10-29: `docs/e2e-agentic-rl.md` records three real dsh / MLX
+> HTTP / bf16-LoRA GRPO updates. That text-only bandit uses an explicit MLX
+> fallback and HF trainer bridge; it does not resolve the production
+> vllm-metal blocker or complete the custom archon / coding-agent milestones.
+> The historical measurements below remain the original S1 results.
+
 ## Status: partial, real MLX smoke and LoRA residency measured
 
 Measured on **2026-10-29**, Mac mini M4, 32 GiB unified memory, macOS 26.6.2.

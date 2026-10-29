@@ -108,6 +108,7 @@ def compute_policy_loss(
     on_incomplete: Literal["batch", "zeros"] = "batch",
     old_log_probs: Tensor | None = None,
     group_ids: list[str] | None = None,
+    advantages: Tensor | None = None,
 ) -> tuple[Tensor, dict]:
     """Dispatch one policy loss. ``log_probs`` must require grad to train."""
     if loss not in LOSS_NAMES:
@@ -123,10 +124,16 @@ def compute_policy_loss(
         )
 
     scale = loss != "drgrpo"
-    advantages, adv_stats = group_advantages(
-        rewards, group_size, scale=scale, on_incomplete=on_incomplete,
-        group_ids=group_ids,
-    )
+    if advantages is None:
+        advantages, adv_stats = group_advantages(
+            rewards, group_size, scale=scale, on_incomplete=on_incomplete,
+            group_ids=group_ids,
+        )
+    else:
+        if advantages.shape != rewards.shape:
+            raise ValueError("Precomputed advantages must match rewards")
+        advantages = advantages.detach()
+        adv_stats = {"advantage_scope": "precomputed_complete_group"}
     adv = advantages.unsqueeze(1)
     log_ratio = log_probs - old_log_probs.detach()
     token_ratio = log_ratio.exp()
