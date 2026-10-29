@@ -52,7 +52,11 @@ def build_dsh_kwargs(
         "base_url": messages_base_url(base_url),
         "api_key": api_key,
         "max_tokens": max_tokens,
-        "env": {"DSH_CONTEXT_WINDOW": str(context_window_tokens)},
+        "env": {
+            "DSH_CONTEXT_WINDOW": str(context_window_tokens),
+            "HOME": home,
+            "XDG_CACHE_HOME": str(Path(home) / "cache"),
+        },
     }
 
 

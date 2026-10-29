@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import torch
 
 import train
+from nano_areal.agent.dsh import build_dsh_kwargs
 from nano_areal.archon.losses import compute_policy_loss
 from nano_areal.archon.model import Qwen35Args, build_model
 from nano_areal.archon.trainer import ArchonTrainer, Trajectory
@@ -16,6 +17,16 @@ from nano_areal.engine.types import InteractionRecord
 
 
 class TrainingContractTests(unittest.TestCase):
+    def test_dsh_uses_isolated_child_home(self):
+        kwargs = build_dsh_kwargs(
+            base_url="http://127.0.0.1:8001/v1",
+            api_key="local-test-only",
+            cwd=".",
+            dsh_home="artifacts/s1/example-home",
+        )
+        self.assertEqual(kwargs["env"]["HOME"], kwargs["dsh_home"])
+        self.assertEqual(kwargs["env"]["XDG_CACHE_HOME"], kwargs["dsh_home"] + "/cache")
+
     def test_sync_cli_preserves_zero_gap(self):
         with patch("sys.argv", ["train.py", "--sync"]):
             with patch("train.main_async", new_callable=AsyncMock) as run:
