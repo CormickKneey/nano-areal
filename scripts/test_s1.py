@@ -114,7 +114,7 @@ def test_loss_switch_and_groups():
     assert not is_offpolicy(0, 0)
     assert not is_offpolicy(2, 4)
     assert is_offpolicy(5, 4)
-    assert not is_offpolicy(-1, 0)
+    assert is_offpolicy(-1, 0)
 
     rewards = torch.tensor([1.0, 1.0, 0.0, 1.0])
     adv, stats = group_advantages(rewards, group_size=2, scale=True, on_incomplete="zeros")
@@ -136,14 +136,18 @@ def test_loss_switch_and_groups():
     # Row 0 is far outside the PPO clip and has a positive advantage.
     ppo_lp = torch.zeros(B, T, requires_grad=True)
     ppo_lp.data[0] = 5.0
-    ppo, _ = compute_policy_loss("grpo", ppo_lp, ref, rewards_t, masks, kl_coef=0.0)
+    ppo, _ = compute_policy_loss(
+        "grpo", ppo_lp, ref, rewards_t, masks, kl_coef=0.0, old_log_probs=ref,
+    )
     ppo.backward()
     assert ppo_lp.grad is not None
     assert float(ppo_lp.grad[0].abs().sum()) == 0.0
 
     fresh = torch.zeros(B, T, requires_grad=True)
     fresh.data[0] = 5.0
-    cispo, cispo_stats = compute_policy_loss("cispo", fresh, ref, rewards_t, masks, kl_coef=0.0)
+    cispo, cispo_stats = compute_policy_loss(
+        "cispo", fresh, ref, rewards_t, masks, kl_coef=0.0, old_log_probs=ref,
+    )
     cispo.backward()
     assert fresh.grad is not None and float(fresh.grad[0].abs().sum()) > 0
     assert cispo_stats["loss_name"] == "cispo"

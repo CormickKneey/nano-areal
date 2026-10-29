@@ -19,6 +19,7 @@ import os
 import signal
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import torch
@@ -72,6 +73,8 @@ async def rollout_worker(
             break
 
         sample = batch[0]
+        group_id = uuid.uuid4().hex
+        rollout_version = engine.current_version
 
         # Run G episodes concurrently for the same sample
         tasks = [workflow.arun_episode(sample) for _ in range(group_size)]
@@ -91,8 +94,10 @@ async def rollout_worker(
                     input_ids=tt.input_ids,
                     response_mask=tt.response_mask,
                     reward=tt.reward,
-                    policy_version=engine.current_version,
                     truncated=tt.truncated,
+                    policy_version=rollout_version,
+                    group_id=group_id,
+                    old_log_probs=tt.logprobs,
                 )
                 await buffer.put(traj)
 
@@ -373,7 +378,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--max-offpolicy", type=int, default=None,
-                        help="Override max_head_offpolicyness. Metal/sync keeps 0 unless set.")
+                        help="Override the version gap; Metal/sync requires 0.")
     parser.add_argument("--log-dir", default="logs")
     parser.add_argument("--save-dir", default="checkpoints")
     parser.add_argument(
@@ -412,6 +417,10 @@ def main():
     config.train.batch_size = args.batch_size
     config.train.lr = args.lr
     if args.max_offpolicy is not None:
+        if args.max_offpolicy < 0 or (config.mode == "sync" and args.max_offpolicy != 0):
+            raise SystemExit(
+                "--sync requires --max-offpolicy 0; gaps must be non-negative"
+            )
         config.async_rl.max_head_offpolicyness = args.max_offpolicy
     config.log_dir = args.log_dir
     config.save_dir = args.save_dir

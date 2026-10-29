@@ -41,6 +41,8 @@ class Trajectory:
     turn_rewards: list[float] = field(default_factory=list)
     # True when the rollout hit max tokens. Those rewards are forced to 0.
     truncated: bool = False
+    group_id: str | None = None
+    old_log_probs: Tensor | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,8 @@ def grpo_loss(
     masks: Tensor,           # [B, T] — response token mask
     clip_eps: float = 0.2,
     kl_coef: float = 0.01,
+    old_log_probs: Tensor | None = None,
+    group_ids: list[str] | None = None,
 ) -> tuple[Tensor, dict]:
     """GRPO. Other surrogates live in ``nano_areal.archon.losses``."""
     from nano_areal.archon.losses import compute_policy_loss
@@ -66,6 +70,8 @@ def grpo_loss(
         masks,
         clip_eps=clip_eps,
         kl_coef=kl_coef,
+        old_log_probs=old_log_probs,
+        group_ids=group_ids,
     )
 
 
@@ -237,6 +243,27 @@ class ArchonTrainer:
 
         from nano_areal.archon.losses import compute_policy_loss
 
+        group_ids = [trajectory.group_id for trajectory in trajectories]
+        if any(group_id is not None for group_id in group_ids):
+            if any(group_id is None for group_id in group_ids):
+                raise ValueError("Cannot mix grouped and ungrouped trajectories")
+        else:
+            group_ids = None
+        behavior = [trajectory.old_log_probs for trajectory in trajectories]
+        old_log_probs = None
+        if any(value is not None for value in behavior):
+            if any(value is None for value in behavior):
+                raise ValueError("Cannot mix captured and missing behavior logprobs")
+            padded_behavior = []
+            for values, sequence in zip(behavior, seqs):
+                if values.shape != sequence.shape:
+                    raise ValueError("Behavior logprobs must align with input_ids")
+                padded_behavior.append(
+                    F.pad(values.to(self.device),
+                          (0, input_ids.shape[1] - values.shape[0]))
+                )
+            old_log_probs = torch.stack(padded_behavior)[:, 1:]
+
         loss, stats = compute_policy_loss(
             getattr(self.config, "loss", "grpo"),
             log_probs=log_probs,
@@ -246,6 +273,8 @@ class ArchonTrainer:
             clip_eps=self.config.clip_eps,
             kl_coef=self.config.kl_coef,
             group_size=getattr(self.config, "group_size", None),
+            old_log_probs=old_log_probs,
+            group_ids=group_ids,
         )
         stats["truncated"] = sum(1 for t in trajectories if t.truncated)
 

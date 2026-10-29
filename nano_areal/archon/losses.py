@@ -21,6 +21,7 @@ def group_advantages(
     *,
     scale: bool = True,
     on_incomplete: Literal["batch", "zeros"] = "batch",
+    group_ids: list[str] | None = None,
 ) -> tuple[Tensor, dict]:
     """Turn scalar rewards into detached advantages.
 
@@ -37,6 +38,19 @@ def group_advantages(
     stats = {"incomplete_groups": 0, "skipped_groups": 0, "advantage_scope": "batch"}
     if rewards.numel() == 0:
         return rewards, stats
+
+    if group_ids is not None:
+        if len(group_ids) != rewards.numel():
+            raise ValueError("group_ids must match the reward batch")
+        advantages = torch.zeros_like(rewards)
+        stats["advantage_scope"] = "group_ids"
+        for group_id in dict.fromkeys(group_ids):
+            indices = [index for index, value in enumerate(group_ids) if value == group_id]
+            row = rewards[indices]
+            advantages[indices] = _normalize(row, scale=scale)
+            if row.numel() == 1:
+                stats["incomplete_groups"] += 1
+        return advantages.detach(), stats
 
     if group_size is None or group_size <= 1:
         return _normalize(rewards, scale=scale).detach(), stats
@@ -77,9 +91,9 @@ def is_offpolicy(version_gap: int, max_head_offpolicyness: int) -> bool:
 
     ``max_head_offpolicyness == 0`` is the macOS sync rule: only the
     current version is kept. A negative gap (rollout newer than the
-    trainer) is not stale.
+    trainer) is also invalid; sync admits only an exact version match.
     """
-    return version_gap > max_head_offpolicyness
+    return not 0 <= version_gap <= max_head_offpolicyness
 
 
 def compute_policy_loss(
@@ -92,20 +106,32 @@ def compute_policy_loss(
     kl_coef: float = 0.01,
     group_size: int | None = None,
     on_incomplete: Literal["batch", "zeros"] = "batch",
+    old_log_probs: Tensor | None = None,
+    group_ids: list[str] | None = None,
 ) -> tuple[Tensor, dict]:
     """Dispatch one policy loss. ``log_probs`` must require grad to train."""
     if loss not in LOSS_NAMES:
         known = ", ".join(LOSS_NAMES)
         raise ValueError(f"Unknown loss {loss!r}. Expected one of: {known}")
+    if rewards.numel() == 0:
+        raise ValueError("Policy loss requires at least one trajectory")
+    if old_log_probs is None:
+        old_log_probs = log_probs.detach()
+    if old_log_probs.shape != log_probs.shape or ref_log_probs.shape != log_probs.shape:
+        raise ValueError(
+            "Policy, behavior and reference logprobs must have identical shapes"
+        )
 
     scale = loss != "drgrpo"
     advantages, adv_stats = group_advantages(
         rewards, group_size, scale=scale, on_incomplete=on_incomplete,
+        group_ids=group_ids,
     )
     adv = advantages.unsqueeze(1)
-    log_ratio = log_probs - ref_log_probs
+    log_ratio = log_probs - old_log_probs.detach()
     token_ratio = log_ratio.exp()
-    kl = log_ratio * masks
+    log_ratio_ref = ref_log_probs.detach() - log_probs
+    kl = (log_ratio_ref.exp() - log_ratio_ref - 1) * masks
 
     if loss == "cispo":
         # Clipped importance weight is detached. Gradient stays on log π,
@@ -143,7 +169,7 @@ def compute_policy_loss(
         "loss": loss_t.item(),
         "kl": (kl.sum() / n_tokens).item(),
         "reward_mean": rewards.mean().item(),
-        "reward_std": rewards.std().item() if rewards.numel() > 1 else 0.0,
+        "reward_std": rewards.std(correction=0).item(),
         "ratio_mean": ((ratio_for_stats * masks).sum() / n_tokens).item(),
         "loss_name": loss,
         **adv_stats,

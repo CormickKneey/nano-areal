@@ -55,6 +55,10 @@ class InteractionRecord:
         # trainer expects [T] tensor aligned with input_ids shift
         logprobs_tensor = torch.zeros(T, dtype=torch.float)
         resp_positions = [i for i, m in enumerate(self.response_mask) if m == 1]
+        if len(resp_positions) != len(self.token_logprobs):
+            raise ValueError(
+                "Response tokens and captured logprobs must have equal lengths"
+            )
         for pos, lp in zip(resp_positions, self.token_logprobs):
             if pos < T:
                 logprobs_tensor[pos] = lp

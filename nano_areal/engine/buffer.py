@@ -96,7 +96,8 @@ class AsyncTrajectoryBuffer:
             except asyncio.TimeoutError:
                 continue
 
-            if _is_stale(self._current_policy_version, traj.policy_version, self.max_head_offpolicyness):
+            version_gap = self._current_policy_version - traj.policy_version
+            if not 0 <= version_gap <= self.max_head_offpolicyness:
                 self.stats.total_discarded += 1
                 continue
 
@@ -111,21 +112,10 @@ class AsyncTrajectoryBuffer:
 
     async def get_batch_sync(self, n: int) -> list["Trajectory"]:
         """
-        Blocking collect for sync mode.
-
-        Same staleness rule as ``get_batch``. A gap of 0 keeps only the
-        current policy version; older trajectories are discarded and the
-        call keeps waiting for fresh ones.
+        Collect exactly n trajectories using the same version filter as async.
+        With max_head_offpolicyness=0, only the current policy is accepted.
         """
-        batch = []
-        while len(batch) < n:
-            traj = await self._queue.get()
-            if _is_stale(self._current_policy_version, traj.policy_version, self.max_head_offpolicyness):
-                self.stats.total_discarded += 1
-                continue
-            batch.append(traj)
-            self.stats.total_consumed += 1
-        return batch
+        return await self.get_batch(n, timeout=float("inf"))
 
     # ------------------------------------------------------------------
     # Inspection
@@ -147,10 +137,3 @@ class AsyncTrajectoryBuffer:
             f"consumed={self.stats.total_consumed}, "
             f"discarded={self.stats.total_discarded})"
         )
-
-
-def _is_stale(current_version: int, trajectory_version: int, max_head_offpolicyness: int) -> bool:
-    """``max_head_offpolicyness == 0`` keeps only the current policy version."""
-    from nano_areal.archon.losses import is_offpolicy
-
-    return is_offpolicy(current_version - trajectory_version, max_head_offpolicyness)
