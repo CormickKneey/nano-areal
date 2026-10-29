@@ -32,9 +32,14 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
 
+from nano_areal.engine.messages import (
+    anthropic_request_to_openai,
+    message_text,
+    openai_completion_to_messages_sse,
+)
 from nano_areal.engine.types import InteractionRecord, TrajectoryTensors
 
 
@@ -139,8 +144,13 @@ class OpenAIProxyServer:
         if key != ADMIN_KEY:
             raise HTTPException(status_code=401, detail="Invalid admin key")
 
-    def _require_session(self, authorization: str | None) -> ProxySession:
-        key = (authorization or "").removeprefix("Bearer ").strip()
+    def _require_session(
+        self,
+        authorization: str | None,
+        x_api_key: str | None = None,
+    ) -> ProxySession:
+        # BFCL sends Authorization: Bearer. dsh sends x-api-key.
+        key = (x_api_key or "").strip() or (authorization or "").removeprefix("Bearer ").strip()
         sid = self._key_to_session.get(key)
         if not sid or sid not in self._sessions:
             raise HTTPException(status_code=401, detail="Invalid session key")
@@ -161,7 +171,7 @@ class OpenAIProxyServer:
             )
         except Exception:
             # Fallback: plain concatenation
-            text = " ".join(m.get("content") or "" for m in messages)
+            text = " ".join(message_text(m.get("content")) for m in messages)
             return self.tokenizer(text, add_special_tokens=True).input_ids
 
     def _tokenize_text(self, text: str) -> list[int]:
@@ -206,10 +216,25 @@ class OpenAIProxyServer:
         async def chat_completions(
             request: Request,
             authorization: str | None = Header(default=None),
+            x_api_key: str | None = Header(default=None),
         ):
-            session = self._require_session(authorization)
+            session = self._require_session(authorization, x_api_key)
             body = await request.json()
             return await self._handle_chat_completion(body, session)
+
+        @app.post("/v1/messages")
+        async def messages(
+            request: Request,
+            authorization: str | None = Header(default=None),
+            x_api_key: str | None = Header(default=None),
+        ):
+            # dsh sdk-minimal posts Anthropic Messages here and requires SSE.
+            session = self._require_session(authorization, x_api_key)
+            body = await request.json()
+            openai_body = anthropic_request_to_openai(body)
+            payload = await self._handle_chat_completion(openai_body, session, return_payload=True)
+            sse = openai_completion_to_messages_sse(payload)
+            return StreamingResponse(iter([sse]), media_type="text/event-stream")
 
         @app.post("/rl/set_reward")
         async def set_reward(
@@ -266,8 +291,11 @@ class OpenAIProxyServer:
     # ------------------------------------------------------------------
 
     async def _handle_chat_completion(
-        self, body: dict, session: ProxySession
-    ) -> JSONResponse:
+        self,
+        body: dict,
+        session: ProxySession,
+        return_payload: bool = False,
+    ) -> JSONResponse | dict:
         messages: list[dict] = body.get("messages", [])
 
         # 1. Tokenize prompt
@@ -343,17 +371,33 @@ class OpenAIProxyServer:
             response_content=content,
             tool_calls=tool_calls_dict,
             parent_id=parent_id,
+            finish_reason=_finish_reason(choice.finish_reason),
         )
         session.interactions[rid] = rec
         session._last_id = rid
 
-        # 8. Return standard ChatCompletion JSON to agent
-        return JSONResponse(content=response.model_dump())
+        # 8. Return standard ChatCompletion JSON, or the payload for Messages SSE.
+        payload = response.model_dump()
+        reasoning = getattr(choice.message, "reasoning_content", None)
+        if reasoning and payload.get("choices"):
+            payload["choices"][0].setdefault("message", {})["reasoning_content"] = reasoning
+        if return_payload:
+            return payload
+        return JSONResponse(content=payload)
 
 
 # ---------------------------------------------------------------------------
 # Reward backpropagation + trajectory assembly
 # ---------------------------------------------------------------------------
+
+def _finish_reason(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    enum_value = getattr(value, "value", None)
+    return enum_value if isinstance(enum_value, str) else str(value)
+
 
 def _build_trajectories(
     session: ProxySession,

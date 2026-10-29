@@ -27,6 +27,44 @@ if TYPE_CHECKING:
 
 
 
+def build_inference_command(
+    *,
+    backend: str,
+    model: str,
+    tokenizer: str,
+    host: str,
+    port: int,
+    tensor_parallel_size: int,
+    dtype: str,
+    max_model_len: int,
+    gpu_ids: list[int],
+) -> tuple[list[str], dict[str, str]]:
+    """``metal`` launches vllm-metal. ``cuda`` launches vLLM's OpenAI server."""
+    if backend == "metal":
+        return [
+            "vllm-metal",
+            "--model", model,
+            "--host", host,
+            "--port", str(port),
+        ], {}
+    if backend != "cuda":
+        raise ValueError(f"Unknown inference backend {backend!r}. Expected metal or cuda.")
+    return [
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", model,
+        "--tokenizer", tokenizer,
+        "--host", host,
+        "--port", str(port),
+        "--tensor-parallel-size", str(tensor_parallel_size),
+        "--dtype", dtype,
+        "--max-model-len", str(max_model_len),
+        "--gpu-memory-utilization", "0.85",
+        "--served-model-name", "default",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "hermes",
+    ], {"CUDA_VISIBLE_DEVICES": ",".join(str(g) for g in gpu_ids)}
+
+
 class RolloutEngine:
     """
     Manages the vllm subprocess and the in-process proxy server.
@@ -58,35 +96,19 @@ class RolloutEngine:
         cfg = self.rollout_config
         mcfg = self.model_config
 
-        env = {**os.environ}
-        gpu_ids_str = ",".join(str(g) for g in cfg.gpu_ids)
-
-        cmd = [
-            "python", "-m", "vllm.entrypoints.openai.api_server",
-            "--model", mcfg.model_name,
-            "--tokenizer", mcfg.tokenizer_name,
-            "--host", cfg.host,
-            "--port", str(cfg.port),
-            "--tensor-parallel-size", str(cfg.tensor_parallel_size),
-            "--dtype", mcfg.dtype,
-            "--max-model-len", str(mcfg.max_model_len),
-            "--gpu-memory-utilization", "0.85",
-            "--served-model-name", "default",
-            "--enable-auto-tool-choice",
-            "--tool-call-parser", "hermes",
-        ]
-
-        if mcfg.device == "mps":
-            # vllm-metal on Apple Silicon — different CLI from standard vllm
-            cmd = [
-                "vllm-metal",
-                "--model", mcfg.model_name,
-                "--host", cfg.host,
-                "--port", str(cfg.port),
-            ]
-        else:
-            env["CUDA_VISIBLE_DEVICES"] = gpu_ids_str
-
+        infer_model = mcfg.infer_model_name or mcfg.model_name
+        cmd, extra_env = build_inference_command(
+            backend=cfg.inference_backend,
+            model=infer_model,
+            tokenizer=mcfg.tokenizer_name or mcfg.model_name,
+            host=cfg.host,
+            port=cfg.port,
+            tensor_parallel_size=cfg.tensor_parallel_size,
+            dtype=mcfg.dtype,
+            max_model_len=mcfg.max_model_len,
+            gpu_ids=cfg.gpu_ids,
+        )
+        env = {**os.environ, **extra_env}
         self._proc = subprocess.Popen(cmd, env=env)
         await self._wait_for_server()
 

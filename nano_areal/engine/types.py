@@ -42,6 +42,9 @@ class InteractionRecord:
     # Parent interaction_id for multi-turn reward discount
     parent_id: str | None = None
 
+    # vLLM finish_reason. "length" is a truncated generation.
+    finish_reason: str | None = None
+
     def to_trajectory(self) -> "TrajectoryTensors":
         """Convert to tensor format for the trainer."""
         T = len(self.input_ids)
@@ -56,11 +59,13 @@ class InteractionRecord:
             if pos < T:
                 logprobs_tensor[pos] = lp
 
+        truncated = self.finish_reason in {"length", "max_tokens"}
         return TrajectoryTensors(
             input_ids=input_ids,
             response_mask=response_mask,
             logprobs=logprobs_tensor,
-            reward=self.reward or 0.0,
+            reward=0.0 if truncated else (self.reward or 0.0),
+            truncated=truncated,
         )
 
 
@@ -71,3 +76,4 @@ class TrajectoryTensors:
     response_mask: torch.Tensor  # [T]  float, 0/1
     logprobs: torch.Tensor       # [T]  log probs (0 at prompt positions)
     reward: float
+    truncated: bool = False

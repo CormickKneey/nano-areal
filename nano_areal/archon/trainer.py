@@ -39,6 +39,8 @@ class Trajectory:
     turns: list[dict] = field(default_factory=list)
     # Per-turn rewards (before discount)
     turn_rewards: list[float] = field(default_factory=list)
+    # True when the rollout hit max tokens. Those rewards are forced to 0.
+    truncated: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -53,44 +55,18 @@ def grpo_loss(
     clip_eps: float = 0.2,
     kl_coef: float = 0.01,
 ) -> tuple[Tensor, dict]:
-    """
-    GRPO objective with PPO-clip and KL penalty.
+    """GRPO. Other surrogates live in ``nano_areal.archon.losses``."""
+    from nano_areal.archon.losses import compute_policy_loss
 
-    Within each group (same problem, G trajectories), advantages are
-    computed by group-normalizing rewards.
-    """
-    B = rewards.shape[0]
-
-    # Group-normalize rewards → advantages
-    # Assume the batch is already one full group or multiple groups of equal size.
-    # For simplicity, normalize over the entire batch.
-    advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)  # [B]
-    advantages = advantages.detach()
-
-    # Per-token importance ratio
-    ratio = (log_probs - ref_log_probs).exp()  # [B, T]
-
-    # PPO-clip
-    adv_expanded = advantages.unsqueeze(1)  # [B, 1] → broadcasts over T
-    pg_loss1 = -ratio * adv_expanded
-    pg_loss2 = -ratio.clamp(1 - clip_eps, 1 + clip_eps) * adv_expanded
-    pg_loss = torch.max(pg_loss1, pg_loss2)  # [B, T]
-
-    # KL penalty (forward KL: current || ref)
-    kl = (log_probs - ref_log_probs) * masks  # [B, T]
-
-    # Mask and reduce
-    n_tokens = masks.sum()
-    loss = ((pg_loss + kl_coef * kl) * masks).sum() / n_tokens.clamp(min=1)
-
-    stats = {
-        "loss": loss.item(),
-        "kl": (kl.sum() / n_tokens.clamp(min=1)).item(),
-        "reward_mean": rewards.mean().item(),
-        "reward_std": rewards.std().item(),
-        "ratio_mean": (ratio * masks).sum().item() / n_tokens.clamp(min=1).item(),
-    }
-    return loss, stats
+    return compute_policy_loss(
+        "grpo",
+        log_probs,
+        ref_log_probs,
+        rewards,
+        masks,
+        clip_eps=clip_eps,
+        kl_coef=kl_coef,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +224,7 @@ class ArchonTrainer:
 
         input_ids, response_mask = self._pad_batch(seqs, masks)
         rewards = torch.tensor(
-            [t.reward for t in trajectories],
+            [0.0 if t.truncated else t.reward for t in trajectories],
             dtype=torch.float32,
             device=self.device,
         )
@@ -259,14 +235,19 @@ class ArchonTrainer:
 
         log_probs = self._compute_policy_log_probs(input_ids, response_mask)
 
-        loss, stats = grpo_loss(
+        from nano_areal.archon.losses import compute_policy_loss
+
+        loss, stats = compute_policy_loss(
+            getattr(self.config, "loss", "grpo"),
             log_probs=log_probs,
             ref_log_probs=ref_log_probs,
             rewards=rewards,
             masks=response_mask[:, 1:],
             clip_eps=self.config.clip_eps,
             kl_coef=self.config.kl_coef,
+            group_size=getattr(self.config, "group_size", None),
         )
+        stats["truncated"] = sum(1 for t in trajectories if t.truncated)
 
         # Gradient accumulation
         loss = loss / self.config.grad_accum_steps
