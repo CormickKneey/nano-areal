@@ -11,8 +11,12 @@ coding/session/hidden-check gate, not full S4 training or benchmark accuracy.
 
 The subsequent [production training preflight](s4-training.md) pins native PEFT
 exports to served model identities and passes six more coding episodes.
-Numerical bf16/4-bit policy drift and zero within-group advantages block an
-optimizer update. Full S4 training remains unaccepted.
+The original bf16/4-bit drift is retained as failed evidence. The aligned-base
+continuation passes deterministic /53 (MAE **0.00486984** versus **0.01**),
+but sampled /0 still fails at **0.01112227**. Complete successful groups have
+zero advantages, and other
+sampled groups contain timeouts/truncations. No informative complete group,
+optimizer update, changed export or backward memory gate is accepted.
 
 ### File tools and cancellation correction
 
@@ -27,8 +31,10 @@ provided in that instruction. Successful sessions actually execute
 
 Each proxy session now owns its pending requests and a request ledger.
 Ending a session marks it inactive, cancels and joins only its requests,
-and prevents export until it is ended and drained. Failed/cancelled episodes
-discard training export, not backend evidence. Backend responses, usages,
+and prevents export until it is ended and drained. Failed requests/cancelled
+episodes discard training export, not backend evidence. Complete reconciled
+external-check failures now export unchanged rewards for training, never a
+coding pass. Backend responses, usages,
 proxy records and durable dsh logs remain independently retained. A
 `response-ready` ledger entry does **not** assert delivery to dsh. Completed
 backend-only responses are still rejected by strict delivered-message
@@ -82,7 +88,13 @@ Failures are not removed from the overall engineering denominator:
 | policy-sync-53 | 2 | 2 | Versioned PEFT production replay |
 | policy-sync-0 | 2 | 2 | Versioned PEFT production replay |
 | policy-final-53 | 2 | 2 | Final provenance and reduced-cache replay |
-| **All started official-task episodes** | **31** | **17** | **14 failures retained** |
+| policy-aligned-53 | 2 | 2 | Aligned-base production parity group |
+| policy-sampled-0 | 2 | 2 | Temperature 0.8; complete, zero advantages |
+| policy-sampled-32 | 2 | 0 | Temperature 0.8; verified failure and max-tokens |
+| policy-sampled-38 | 4 | 0 | Temperature 1.0; three verified failures and timeout |
+| policy-sampled-91 | 4 | 0 | Temperature 0.8; three verified failures and timeout |
+| policy-sampled-109 | 4 | 3 | Temperature 0.8; three passes and max-tokens |
+| **All started official-task episodes** | **49** | **24** | **25 failures retained** |
 
 The new run contributes 11/17; the previous handoff contributes 0/8. The
 earlier deterministic report has only one finished row, but two retained
@@ -92,10 +104,14 @@ its second row still counts as a failure. The corrected SIGINT run planned
 two episodes but started only one; its unstarted second episode is not a
 failure or a pass. Mixed prompts/configurations, repeated tasks and deliberate
 cancellation tests make the earlier 11/25 an exploration ledger, not HumanEval
-accuracy. The training-preflight continuation adds 6/6 for a cumulative 17/31.
+accuracy. The training-preflight continuation adds 6/6 for 17/31. The aligned
+continuation adds 7/18 for **24/49**; all 25 failures remain. The /109 group
+cannot train on its apparent [1,1,0,1] rewards: its zero-reward episode is
+truncated, so the group is incomplete. No failed episode is dropped and no
+cross-task or cross-group selection is used to manufacture advantages.
 
 Validation at the coding milestone: **79 regression tests pass** (the later
-policy-preflight milestone has **86**), including asynchronous SDK
+policy-preflight milestone has **86**, aligned continuation **106**), including asynchronous SDK
 cancellation, per-session request isolation, active-session export rejection,
 failed-episode discard without evidence deletion, embedded signal ownership,
 and existing S1/S2/S3 contracts. The targeted Ruff command below passes;

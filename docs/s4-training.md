@@ -18,15 +18,49 @@ external pytest files with exact reconciliation. With serving stopped,
 **[0,0]**; no update is performed. These two starts increase the retained
 engineering denominator from **17/31** to **19/33**, not benchmark accuracy.
 
-The next declared sampling plan is two complete episodes per task at
-temperature **0.8**, first HumanEval/0, then HumanEval/32 if needed, with the
-same prompt, 512-token turn cap, 120-second activity timeout, and unchanged
-official external rewards. Do not select only successful episodes: complete,
-reconciled external-test failures are exported with their original reward;
-timeouts, truncations and accounting failures remain in the exploration
-denominator but are ineligible for updates. All-success groups remain zero.
-The coding acceptance report still requires success; training eligibility
-is a separate field and never converts a failed check into a coding pass.
+This passes deterministic /53, **not universal policy parity**. A second
+sequential preflight over the temperature-0.8 /0 complete group
+(`policy-aligned-audit/preflight.json`) measures **0.01112227 MAE** over
+**9 turns / 636 response tokens**, maximum error **0.49179697**, in **52.84
+seconds**. It **fails** the unchanged **0.01** bound and exits **2**; rewards
+remain [1,1], advantages [0,0]. Sequence lengths are 1177–1898. Existing system
+swap used is **3670.88 -> 3662.88 MiB**, free-memory percentages **92% -> 93%**.
+These remain forward-only measurements, not backward peaks.
+
+An unbound diagnostic uses float32 affine arithmetic only for the output head
+against untouched captured probabilities. MAE improves only to **0.01057059**,
+still failing. No manifest or production rollout is rewritten. Dequantized
+bf16 dense operations and MLX fused quantized kernels have different precision
+paths; full effective-operator alignment remains to investigate. No threshold
+is loosened or successful group substituted for this failure.
+
+Subsequent sampling was declared before each group, retaining the same prompt,
+512-token turn cap, 120-second activity timeout, and unchanged external rewards:
+
+| Evidence under artifacts/s4 | Task | Temperature | Passed/started | Training eligible | Blocking outcome |
+| --- | --- | ---: | ---: | ---: | --- |
+| policy-aligned-53 | HumanEval/53 | 0 | 2/2 | 2/2 | Rewards [1,1], zero advantages |
+| policy-sampled-0 | HumanEval/0 | 0.8 | 2/2 | 2/2 | Rewards [1,1], zero advantages |
+| policy-sampled-32 | HumanEval/32 | 0.8 | 0/2 | 1/2 | One verified failure, one max-tokens |
+| policy-sampled-38 | HumanEval/38 | 1.0 | 0/4 | 3/4 | Three verified failures, one timeout |
+| policy-sampled-91 | HumanEval/91 | 0.8 | 0/4 | 3/4 | Three verified failures, one timeout |
+| policy-sampled-109 | HumanEval/109 | 0.8 | 3/4 | 3/4 | Three successes, one max-tokens |
+
+This continuation adds **7/18**, for cumulative **24/49** engineering starts;
+all **25 failures** remain. These selected diagnostic tasks are not HumanEval
+accuracy or pass@k. The /109 group has apparent rewards [1,1,0,1], but its
+max-tokens episode is incomplete: it cannot supply a valid negative advantage.
+The complete successful groups still have zero advantage. Failed checks are
+not relabeled, discounted turn rewards are not substituted, and episodes from
+different groups/tasks are not pooled or cherry-picked. Every group has zero
+backend-only completions; the two timeouts fail strict reconciliation.
+
+Complete, reconciled external-test failures now export their original reward;
+timeouts, truncations and accounting failures stay in the denominator but are
+ineligible for updates. The coding report still requires success; a separate
+training-eligibility field never converts a failed check into a coding pass.
+No informative complete group was obtained. **Updates remain 0; no v1 adapter,
+production feedback transition, or backward memory qualification is claimed.**
 
 Reproduce conversion with the repository-local Metal Python environment:
 
@@ -81,7 +115,7 @@ PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py update \
 # stop it again, then preflight the fresh group with --policy-version 1.
 ```
 
-## Result: training acceptance blocked, not a completed update
+## Original preflight before alignment
 
 S1/S2 and the measured S3 gates remain unchanged. The coding gates remain
 accepted. This continuation adds a native PEFT export, immutable local policy
@@ -178,7 +212,7 @@ a measured 1.25 GiB limit. The final replay adds
 blocks). Server logs and system snapshots are retained under `policy-final`.
 This does not alter S1 defaults or establish pressure-free training residency.
 
-## Reproduce the bounded gate
+## Reproduce the original unaligned blocked gate
 
 Run from the repository root; choose fresh evidence directories for new starts.
 
@@ -221,9 +255,9 @@ PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py preflight \
 
 ## Remaining acceptance
 
-1. Align the actual serving/training base and measure policy parity without
-   loosening the bound or replacing behavior probabilities. Static v0 identity
-   passes; nonzero adapter/version feedback and numerical parity do not.
+1. Alignment passes deterministic /53 at **0.00486984**, but sampled /0 fails
+   at **0.01112227** against **0.01**. Resolve residual operator precision.
+   Preserve original 0.10771345 / 0.10248081 evidence and captured probabilities.
 2. Obtain a genuinely informative complete group under declared sampling and
    unchanged external rewards. Keep successful groups as zero-advantage groups.
 3. Only then run 1–3 bounded optimizer steps, export a changed adapter, restart
@@ -231,6 +265,6 @@ PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py preflight \
 4. Measure backward/optimizer/export and serving memory, including swap and
    activation peaks. No co-resident or long-context qualification is implied.
 
-Validation: 86 regression tests pass, targeted Ruff and `git diff --check`
+Validation: **106 regression tests pass**, targeted Ruff and `git diff --check`
 pass. Owned production servers are stopped; caches, weights and raw evidence
 remain repository-local and ignored. No multi-hour GRPO was started.

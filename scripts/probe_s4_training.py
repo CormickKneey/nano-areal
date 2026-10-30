@@ -155,6 +155,16 @@ def main():
     try:
         if args.phase == "update" and (args.output / "adapter-v1").exists():
             raise FileExistsError("Immutable v1 adapter already exists")
+        adapter = args.output / f"adapter-v{args.policy_version}"
+        manifest_path = args.output / f"policy-v{args.policy_version}.json"
+        if args.phase != "prepare":
+            binding = PolicyBinding.read(manifest_path)
+            binding.verify_files()
+            if (checkpoint_files(args.train_model) != binding.manifest["training_files"]
+                    or checkpoint_files(args.infer_model)
+                    != binding.manifest["inference_files"]):
+                raise ValueError("Requested checkpoint differs from bound policy")
+            episodes = complete_group(args.group, binding)
         if trace:
             trace.thread.start()
         torch.manual_seed(42)
@@ -165,8 +175,6 @@ def main():
         report["trainable_parameters"] = sum(
             parameter.numel() for parameter in trainer.parameters.values()
         )
-        adapter = args.output / f"adapter-v{args.policy_version}"
-        manifest_path = args.output / f"policy-v{args.policy_version}.json"
         if args.phase == "prepare":
             previous = {
                 name: value.detach().cpu().clone()
@@ -197,14 +205,7 @@ def main():
             binding.write(manifest_path)
             report.update(status="prepared", model=binding.model)
         else:
-            binding = PolicyBinding.read(manifest_path)
-            binding.verify_files()
-            if (checkpoint_files(args.train_model) != binding.manifest["training_files"]
-                    or checkpoint_files(args.infer_model)
-                    != binding.manifest["inference_files"]):
-                raise ValueError("Requested checkpoint differs from bound policy")
             restore(trainer, adapter)
-            episodes = complete_group(args.group, binding)
             report["group"] = str(args.group)
             report["turns"] = []
             rewards = []
@@ -328,7 +329,8 @@ def main():
                 gate = report["memory_gate"]
                 gate["passed"] = (gate["swap_growth_mib"] <= 0
                                   and gate["driver_within_recommended_budget"])
-                if report["updates"] and not gate["passed"]:
+                if (report["status"] == "updated-exported-feedback-pending"
+                        and not gate["passed"]):
                     report["status"] = "updated-exported-memory-blocked"
         save()
     print(json.dumps(report, indent=2), flush=True)

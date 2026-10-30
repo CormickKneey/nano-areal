@@ -4,112 +4,108 @@ Branch: cursor/macos-qwen3vl-v02-plan-f4cf
 PR: #4 OPEN; same branch; no merge or force-push.
 
 Stage:
-- S1 production HTTP and S2 native archon parity remain accepted.
-- S3 remains accepted: unchanged BFCL fixture 2/2 twice under production
-  hermes; previous CLEVR-count MPS loss-drop remains valid.
-- S4 bounded coding/session/hidden-check gates remain accepted.
-- Static initial PEFT policy identity/provenance is measured on production.
-- Full S4 training is BLOCKED: bf16/4-bit behavior drift and homogeneous
-  successful groups prevent an honest nonzero GRPO update.
-- No optimizer step, trained adapter export or v0-to-v1 feedback occurred.
-  No multi-hour GRPO. Earlier digit-bandit training is not this coding gate.
+- S1 production HTTP, S2 native parity, accepted S3 and bounded S4 coding
+  gates remain unchanged. Full S4 training is NOT accepted.
+- Effective-base alignment improves behavior parity, but only deterministic
+  HumanEval/53 passes; sampled HumanEval/0 still fails the unchanged 0.01.
+- No informative complete sampled group was obtained. Updates = 0.
+- No changed adapter, v1 production feedback or backward memory measurement.
 
-Commits:
-- d03a3ea: accepted generic S3 execution/default-directory tool policy.
-- 8688424 / 52d40ff: accepted bounded coding groups, owned cancellation.
-- 468cdef feat(s4): bind metal policy and audit training gates
-  Pushed to the same PR branch. Native PEFT export, SHA-256 policy manifest,
-  immutable model/version response checks, session binding, policy fields
-  through proxy JSON/client export, complete-group native preflight.
-- The docs commit containing this handoff records measured blocked gates;
-  identify its hash with git log -2 --oneline.
+Milestones committed and pushed:
+- 7e5570d: previous handoff; 468cdef: static PEFT binding/preflight.
+- 9dd6b56 fix(s4): align training with served quantized base
+  Export actual MLX affine 4-bit base into native HF-layout floating weights,
+  including tied embedding and Conv3D layout. Original checkpoints and S1/S2
+  loaders unchanged. 253 modules dequantized; 713 output tensors. Separate
+  coding passes from complete verified-failure training exports.
+- 51029c7 feat(s4): gate bounded episode-balanced updates
+  Opt-in one-step GRPO, complete episodes and unchanged external rewards,
+  MAE <= 0.01, finite/nonzero gradients/delta, immutable PEFT v1, exact
+  roundtrip, parent/group provenance, sampled memory checks. NOT a measured
+  native update. CPU coverage does not satisfy the S4 update gate.
+- Following docs/audit commit: identify with git log -1 --oneline.
+  Reject incomplete groups before native allocation; retain residual drift.
 
-Evidence under artifacts/s4 (ignored, retained locally):
-- policy-sync/prepare.json: rank-8 native q/v PEFT initialization, 2,949,120
-  trainable parameters, 9.19 seconds. Production activates 72 modules.
-  Initial B tensors are zero: loading v0 is NOT a nonzero adapter update.
-- policy-sync-53/report.json: HumanEval/53 2/2, model turns 4/4, tools 3/3.
-- policy-sync-0/report.json: HumanEval/0 2/2, model turns 4/4, tools 3/3.
-- Both strictly reconcile dsh/proxy/backend/export, pass official external
-  pytest test files 2/2 each, and have zero backend-only completions.
-- policy-sync/preflight.json: 8 turns / 390 response tokens, MAE 0.10771345,
-  maximum token error 4.96346903, declared MAE threshold 0.01; 42.01 seconds,
-  exit 2. Captured behavior probabilities are not replaced by recomputation.
-- policy-final/prepare.json: final-code PEFT exact roundtrip, 6.55 seconds,
-  model s4-policy-v0-3eb0f9fb840aa4bf. The earlier snapshot has model
-  s4-policy-v0-6f0c78fbb794650a; different paths/metadata, same seeded adapter
-  tensor file. Independent v0 snapshots are not a trained version transition.
-- policy-final-53/report.json: final-code replay 2/2, model turns 4/4,
-  tools 3/3, official pytest files 2/2, exact usage/tool/attempt accounting.
-- policy-final/preflight.json: 8 turns / 396 response tokens, MAE 0.10248081,
-  maximum token error 5.21190739, threshold unchanged at 0.01; 41.85 seconds,
-  exit 2. Actual episode rewards [1, 1], group advantages [0, 0], updates 0.
-  Do not manufacture spread from proxy turn-discounted rewards.
+Measured ignored evidence under artifacts/s4:
+- policy-aligned/policy-v0.json: s4-policy-v0-d43b14bef7d62f10.
+  prepare exact PEFT roundtrip, 7.29 seconds, initial B = zero.
+- policy-aligned-53: 2/2 official external pytest, strict dsh/proxy/backend/
+  export reconciliation. 8 turns / 396 response tokens. Sequential preflight
+  MAE 0.00486984055, max token error 0.16891715, bound 0.01, 46.26 seconds.
+  Numerical gate passes THIS GROUP only; rewards [1,1], advantages [0,0],
+  exit 2 due to homogeneous rewards. No update.
+- policy-aligned-audit/preflight.json: sampled HumanEval/0 complete group,
+  9 turns / 636 response tokens, MAE 0.01112226647, max error 0.49179697,
+  bound 0.01, 52.84 seconds, exit 2. Rewards [1,1], advantages [0,0].
+  Sequence lengths 1177-1898. After-forward MPS allocated/driver snapshots
+  8,954,668,288 / 9,884,614,656 bytes. Existing swap 3670.88 -> 3662.88 MiB;
+  system memory free 92% -> 93%. Not backward/activation peaks.
+- policy-aligned-audit/head-diagnostic.json: unbound float32 affine output
+  head only, MAE 0.01057059142; still fails. No policy identity change.
+- aligned-diagnostic.json: old captured /53 behavior, aligned counterfactual
+  MAE 0.00516070607. Diagnostic only, not bound rollout acceptance.
+- Preserve original policy-sync 0.10771345 / policy-final 0.10248081 failures.
+  Never overwrite captured probabilities or loosen the 0.01 bound.
 
-Memory boundaries:
-- Serving and native training loaded sequentially, never co-resident.
-- Native after-forward snapshots: MPS allocated 8,954,668,288 bytes, driver
-  9,884,614,656 bytes. Not activation peaks or backward qualification.
-- Initial preflight sequence lengths 1179-1642, not an 8192-token test.
-- Final preflight system swap 3790.88 -> 3782.88 MiB (preexisting swap).
-- Initial Metal KV layout 18.91 GiB despite the 1.25 GiB CLI KV flag.
-  Final replay also sets --gpu-memory-utilization 0.35: actual layout
-  4.69 GiB / 2133 blocks. Do not assume --kv-cache-memory-bytes alone
-  bounds the installed Metal planner. S1 defaults/package code unchanged.
-- Backward/optimizer/export memory and pressure-free residency unqualified.
+Declared sampling / all-start denominator:
+  directory                 task          temp  passed/started eligible
+  policy-aligned-53          HumanEval/53  0     2/2            2/2
+  policy-sampled-0           HumanEval/0   0.8   2/2            2/2
+  policy-sampled-32          HumanEval/32  0.8   0/2            1/2
+  policy-sampled-38          HumanEval/38  1.0   0/4            3/4
+  policy-sampled-91          HumanEval/91  0.8   0/4            3/4
+  policy-sampled-109         HumanEval/109 0.8   3/4            3/4
+  Same generic instruction, 512-token cap, 120-second activity limit,
+  original official external rewards, fresh workspaces. No sampling seed
+  specified; recorded stochastic draws are not exactly reproducible by seed.
+- This run adds 7/18; cumulative 24/49, all 25 failures retained, including
+  earlier 17/31 and its 14 failures. NOT HumanEval accuracy or pass@k.
+- /32 includes max-tokens; /38 and /91 each include one timeout. /109 has
+  apparent [1,1,0,1], but its failed episode is max-tokens: incomplete group,
+  not a valid negative advantage. Never cherry-pick complete episodes or pool
+  tasks/groups to manufacture spread. Every backend-only count = 0.
 
-All-start denominator:
-- Prior 11/25 and all 14 failures/cancellations retained.
-- This continuation adds 6/6 official-task starts: cumulative 17/31.
-- Repeated selected task groups are engineering probes, NOT HumanEval
-  benchmark accuracy or pass@k. Full table: docs/s4-foundations.md.
-
-Reproduce with fresh output directories and repository-local caches:
+Reproduce from repo root, with all caches on /Volumes/workspace:
   export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
   export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
-  export XDG_CACHE_HOME="$PWD/.s1-cache/xdg"
-  export POLICY_OUT=artifacts/s4/policy-reproduce
-  export GROUP_OUT=artifacts/s4/policy-reproduce-53
+  export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
   mkdir -p "$TMPDIR"
-  PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py prepare \
+  # Existing aligned checkpoint is immutable; choose a NEW path to reconvert.
+  .s1-cache/venv-metal/bin/python scripts/align_s4_base.py \
+    --source .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+    --output .s1-cache/models/Qwen3-VL-4B-Instruct-aligned-reproduce
+  # Ensure owned serving API AND engine stopped first.
+  .venv/bin/python scripts/probe_s4_training.py preflight \
     --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
-    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct --output "$POLICY_OUT"
-  MODEL=$(.venv/bin/python -c \
-    'import json,os; print(json.load(open(os.environ["POLICY_OUT"]+"/policy-v0.json"))["model"])')
-
-  # Start the owned production server with the complete launch command in
-  # docs/s4-training.md, using this MODEL and POLICY_OUT; LoRA flags required.
-  # Do not enable runtime/in-place adapter mutation; use static snapshots.
-  PYTHONPATH=. .venv/bin/python scripts/probe_s4.py \
-    --task-manifest .s1-cache/nano-swe/human-eval-53/manifest.json \
-    --model "$MODEL" --policy-manifest "$POLICY_OUT/policy-v0.json" \
-    --episodes 2 --timeout 120 --temperature 0 --output "$GROUP_OUT"
-  # Stop that owned server before loading native training weights.
-  PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py preflight \
-    --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
-    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct \
-    --output "$POLICY_OUT" --group "$GROUP_OUT"
-  # Expected exit 2 with retained blocked report, not a training success.
+    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+    --output artifacts/s4/policy-aligned-audit --group artifacts/s4/policy-sampled-0
+  # Expected exit 2: residual numerical drift and homogeneous rewards.
+  # For NEW sampling: prepare a fresh output/manifest, launch static production
+  # with LoRA as documented in docs/s4-training.md; stop before native load.
 
 Validation:
   PYTHONPATH=. .venv/bin/python -m pytest -q
-  # 86 passed. Targeted Ruff and git diff --check pass.
-  .venv/bin/ruff check nano_areal/sync/policy.py \
-    nano_areal/archon/qwen3vl_lora.py nano_areal/engine/types.py \
-    scripts/probe_s4.py scripts/probe_s4_training.py scripts/test_policy_sync.py
-  # Existing unrelated proxy.py line-length violations remain untouched.
+  # 106 passed; targeted Ruff and git diff --check pass.
+  .venv/bin/ruff check scripts/align_s4_base.py scripts/test_s4_alignment.py \
+    scripts/test_s4_update.py scripts/probe_s4.py scripts/probe_s4_training.py \
+    nano_areal/archon/s4_update.py
 
-Remaining gates in order:
-1. Align effective train/served base weights; measure numerical behavior
-   parity without loosening the bound. Static identity is not nonzero sync.
-2. Keep all-success groups zero-advantage; obtain genuinely informative
-   complete groups with declared sampling and unchanged external rewards.
-3. Only then run 1-3 bounded optimizer steps, export a changed adapter,
-   restart production on its immutable version, reconcile fresh episodes,
-   and measure backward/optimizer/export memory. No multi-hour GRPO.
-4. Do not claim full S4 until update/export/feedback/memory gates pass.
+Remaining gates, in order:
+1. Residual train/served operator precision alignment: /53 passes but sampled
+   /0 MAE 0.01112227 fails. Float32 output head alone insufficient. Investigate
+   fused quantized arithmetic versus bf16 dense rounding without changing
+   thresholds. Preserve original architecture acceptance separately.
+2. Obtain genuinely informative COMPLETE groups with declared sampling and
+   unchanged external rewards. All-success advantages stay zero; no reward,
+   turn-discount or episode-selection tricks. Failed starts stay in denominator.
+3. Only then execute 1-3 bounded steps (implemented phase does ONE), export
+   changed v1, restart production immutably, reconcile fresh episodes and
+   measure backward/optimizer/export memory. Sequential only. Proposed memory
+   gate: no swap growth and sampled driver <= recommended MPS budget; sampled
+   peaks are not exact or 8192-token qualification.
+4. No full S4 claim until update/export/feedback/memory gates all measured.
 
-Owned API/engine processes stopped. No OrbStack quit, remount, sudo,
-passwords, merge, force-push or user-owned prompt/log changes. No weights,
-hidden tests, task solutions or raw sessions committed. Details and exact
-production launch: docs/s4-training.md. All earlier evidence retained.
+Owned production API/engine stopped and verified absent. No multi-hour GRPO,
+OrbStack quit, remount, sudo, passwords, merge or force-push. No weights,
+hidden checks, task solutions or raw sessions committed. User prompt/log files
+untouched. Evidence table: docs/s4-foundations.md; details: docs/s4-training.md.
