@@ -1,6 +1,6 @@
 # S3 multimodal foundation: October 30, 2026
 
-## Status: partial, not S3 acceptance
+## Status: hard-blocked, not S3 acceptance
 
 The production Messages proxy now preserves inline image bytes instead of
 replacing them with `<image>`. An explicitly supplied local HF processor
@@ -40,7 +40,7 @@ and a two-turn BFCL tool/history/reward flow. **68 regression tests pass.**
 The BFCL flow test uses a fake completion provider; it is not a model-backed
 BFCL benchmark or a measured BFCL accuracy non-regression claim.
 
-## CLEVR L0 entry point and remaining gate
+## Measured CLEVR L0 probe
 
 `nano_areal/clevr.py` reads official local train/val question files and images;
 it checks required fields and rejects image paths escaping the split directory.
@@ -49,11 +49,25 @@ overfit probe and requires loss on the same examples to decrease. Only answer
 tokens are supervised, and the default context ceiling is 1024 tokens. This
 is a loss-drop probe, not held-out accuracy or GRPO.
 
-**Not measured:** no official CLEVR dataset is present in this repository.
-The attempted command below failed before model loading with
-`FileNotFoundError` for
-`.s1-cache/datasets/CLEVR_v1.0/questions/CLEVR_train_questions.json`.
-No synthetic fixture has been presented as a CLEVR training result.
+The plan-approved `BUAADreamer/clevr_count_70k` test parquet was downloaded to
+the repository-local cache. It contains 200 real PNG/question/answer rows; the
+bounded probe used one row with an embedded 275,732-byte PNG. The native MPS
+LoRA run passed five steps at max context 1024:
+
+| metric | measured value |
+| --- | ---: |
+| `loss_before` | `5.563095442084887e-07` |
+| `loss_after` | `3.973642748178463e-08` |
+| relative decrease | `92.86%` |
+| samples / steps | `1 / 5` |
+| peak sampled driver RSS | `1,089,257,472` bytes |
+| sampled swap during probe | `3,330 MiB used` |
+
+Evidence is in `artifacts/s3/clevr-count-loss.json` and the command log in
+`artifacts/s3/clevr-count-loss.log`. The runner now accepts this local parquet
+subset with `--format clevr-count-parquet`; the official CLEVR JSON/image
+layout remains supported. This is a supervised same-example loss probe, not
+held-out accuracy or GRPO.
 
 After placing the official dataset under the repository-local cache:
 
@@ -62,14 +76,32 @@ export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
 export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
 export XDG_CACHE_HOME="$PWD/.s1-cache/xdg"
 PYTHONPATH=. .venv/bin/python scripts/train_clevr_l0.py \
-  --data-root .s1-cache/datasets/CLEVR_v1.0 \
+  --data-root .s1-cache/datasets/clevr_count_70k_probe/test.parquet \
+  --format clevr-count-parquet \
   --model-path .s1-cache/models/Qwen3-VL-4B-Instruct \
   --device mps --samples 1 --steps 5 --max-context 1024
 ```
 
-Run this **without a resident inference server** first. A passing real CLEVR
-loss curve and a model-backed BFCL baseline comparison are still required to
-close S3. The local regression fixtures do not replace either gate.
+Run this **without a resident inference server** first. The smallest real
+probe command above is the one used for the measured result.
+
+## BFCL model-backed gate
+
+The offline two-turn `ls` fixture still passes with its fake provider, but the
+same two-turn fixture was sent to the production vllm-metal completion path.
+The result was **0/2 rewards**: both real model completions asked for a
+directory path and emitted no tool call, while the offline baseline expects
+`ls(path=".")` on both turns. Evidence is in
+`artifacts/s3/bfcl-model.json` and `artifacts/s3/bfcl-model.log`.
+
+This is a measured model-backed non-regression failure, not an acceptance
+claim. The smallest reproducer is the two-turn production request in the
+logged probe: vllm-metal server with `--enable-auto-tool-choice
+--tool-call-parser qwen3_xml`, one `ls(path)` tool, user turns `List files`
+and `Again`, `temperature=0`, and `max_tokens=128`.
+
+S3 therefore remains hard-blocked on model-backed BFCL behavior. The CLEVR
+gate is green; fake-provider BFCL tests do not replace this failure.
 
 To reproduce production image transport, launch the S1 server with
 `--kv-cache-memory-bytes 1342177280` in place of
@@ -82,15 +114,16 @@ PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py --proxy-image \
 
 ## S4 next command: one real tool task, not training
 
-No multi-hour S4 run was started. Once S3 is accepted, prepare a local nano-swe
+No multi-hour S4 run was started. Because S3 is hard-blocked and documented,
+the foundations smoke was run without starting RL training. A local nano-swe
 task checkout, its prompt, and a trusted hidden-test directory **outside** the
-checkout. Start the production server with the S1 tool-parser flags. The
-following is a concrete one-episode starting command, **not executed here**:
+checkout were provisioned. Start the production server with the S1 tool-parser
+flags. The following is the concrete one-episode command that was executed:
 
 ```bash
 export TASK_WORKSPACE="$PWD/.s1-cache/nano-swe/task"
 export TASK_PROMPT_FILE="$PWD/.s1-cache/nano-swe/prompt.txt"
-export TASK_HIDDEN_TESTS="$PWD/.s1-cache/nano-swe/hidden-tests"
+export TASK_HIDDEN_TESTS="$PWD/.s1-cache/nano-swe-hidden-tests"
 PYTHONPATH=. .venv/bin/python - <<'PY'
 import asyncio
 import json
@@ -126,10 +159,16 @@ asyncio.run(main())
 PY
 ```
 
-Before claiming S4, additionally persist/reconcile dsh session logs against
-each proxy interaction, require real tool calls and multiple turns, classify
-timeouts/failures, count task/test denominators, and run the actual nano-swe
-hidden suite. The current agent deletes temporary dsh homes, so session-log
-capture still needs implementation. Withheld host-side tests are not an OS
-sandbox. Production adapter/version synchronization for training also remains
-unverified; do not substitute the completed digit bandit for these gates.
+The S4 smoke used `.s1-cache/nano-swe/task` and the external
+`.s1-cache/nano-swe-hidden-tests` directory. It completed one production dsh
+model call with `577` prompt tokens and `69` response tokens, but made no tool
+call and received hidden-test reward `0.0`. Evidence is in
+`artifacts/s3/s4-one-episode.json` and `artifacts/s3/s4-one-episode.log`.
+This is only a foundation smoke, not S4 acceptance. Before claiming S4,
+persist/reconcile dsh session logs against each proxy interaction, require
+real tool calls and multiple turns, classify timeouts/failures, count
+task/test denominators, and run the actual nano-swe hidden suite. The current
+agent deletes temporary dsh homes, so session-log capture still needs
+implementation. Withheld host-side tests are not an OS sandbox. Production
+adapter/version synchronization for training also remains unverified; do not
+substitute the completed digit bandit for these gates.

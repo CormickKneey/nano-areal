@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from io import BytesIO
 from pathlib import Path
 
 import torch
@@ -14,15 +15,24 @@ from torch.nn import functional as F
 from transformers import AutoProcessor
 
 from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
-from nano_areal.clevr import load_clevr
+from nano_areal.clevr import load_clevr, load_clevr_count_parquet
 
 
 def run(args):
-    examples = load_clevr(args.data_root, args.split, args.samples)
+    examples = (
+        load_clevr_count_parquet(args.data_root, args.samples)
+        if args.format == "clevr-count-parquet"
+        else load_clevr(args.data_root, args.split, args.samples)
+    )
     processor = AutoProcessor.from_pretrained(args.model_path, local_files_only=True)
     batches = []
     for example in examples:
-        with Image.open(example.image_path) as image:
+        image_source = (
+            BytesIO(example.image_bytes)
+            if example.image_bytes is not None
+            else example.image_path
+        )
+        with Image.open(image_source) as image:
             messages = [
                 {
                     "role": "user",
@@ -120,6 +130,9 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--format", choices=("official", "clevr-count-parquet"), default="official"
+    )
     parser.add_argument("--model-path", default=".s1-cache/models/Qwen3-VL-4B-Instruct")
     parser.add_argument("--split", choices=("train", "val"), default="train")
     parser.add_argument("--samples", type=int, default=1)

@@ -11,8 +11,9 @@ from pathlib import Path
 class CLEVRExample:
     question: str
     answer: str
-    image_path: Path
+    image_path: Path | None
     question_index: int
+    image_bytes: bytes | None = None
 
 
 def load_clevr(root: Path, split="train", limit=1):
@@ -40,4 +41,37 @@ def load_clevr(root: Path, split="train", limit=1):
         )
     if not examples:
         raise ValueError("CLEVR split contains no examples")
+    return examples
+
+
+def load_clevr_count_parquet(path: Path, limit=1):
+    """Load the plan-approved BUAADreamer CLEVR count parquet subset."""
+    if limit <= 0:
+        raise ValueError("Expected a positive sample limit")
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError as error:
+        raise RuntimeError("The parquet subset requires pyarrow") from error
+
+    table = parquet.read_table(path).slice(0, limit)
+    examples = []
+    for index, row in enumerate(table.to_pylist()):
+        images = row.get("images") or []
+        if not row.get("problem") or "answer" not in row or not images:
+            raise ValueError("CLEVR count row requires question, answer, and image")
+        image_bytes = images[0].get("bytes")
+        if not image_bytes:
+            raise ValueError("CLEVR count row has no embedded image bytes")
+        question = row["problem"].replace("<image>", "", 1).strip()
+        examples.append(
+            CLEVRExample(
+                question=question,
+                answer=str(row["answer"]),
+                image_path=None,
+                question_index=index,
+                image_bytes=image_bytes,
+            )
+        )
+    if not examples:
+        raise ValueError("CLEVR count parquet contains no examples")
     return examples
