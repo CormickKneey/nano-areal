@@ -19,7 +19,10 @@ import torch
 from probe_mac_vlm import memory_snapshot
 
 from nano_areal.agent.dsh import DshAgent
-from nano_areal.archon.qwen3vl_lora import Qwen3VLLoRATrainer
+from nano_areal.archon.qwen3vl_lora import (
+    NativeQwen3VLLoRATrainer,
+    Qwen3VLLoRATrainer,
+)
 from nano_areal.archon.trainer import Trajectory
 from nano_areal.engine.buffer import AsyncTrajectoryBuffer
 from nano_areal.engine.proxy import OpenAIProxyServer, OpenAIProxyWorkflow
@@ -180,7 +183,12 @@ async def run(args, report):
                         "No reward spread; cannot claim a nonzero GRPO update"
                     )
                 if trainer is None:
-                    trainer = Qwen3VLLoRATrainer(args.train_model, args.lr)
+                    trainer_type = (
+                        NativeQwen3VLLoRATrainer
+                        if args.trainer_implementation == "archon"
+                        else Qwen3VLLoRATrainer
+                    )
+                    trainer = trainer_type(args.train_model, args.lr)
                 stats = trainer.train_step(batch)
                 trainer.export_mlx_adapter(adapter)
                 synced = await http.post(
@@ -249,6 +257,9 @@ def main():
     parser.add_argument("--infer-port", type=int, default=8010)
     parser.add_argument("--proxy-port", type=int, default=8011)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--trainer-implementation", choices=("hf", "archon"), default="hf"
+    )
     parser.add_argument("--output", type=Path, default=Path("artifacts/s1/e2e"))
     args = parser.parse_args()
     if args.steps < 1 or args.group_size < 2:

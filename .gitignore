@@ -15,3 +15,5 @@ node_modules
 .venv
 .s1-cache/
 artifacts/s1/
+artifacts/s2/
+artifacts/s3/

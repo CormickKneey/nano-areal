@@ -1,4 +1,4 @@
-"""HF-backed Qwen3-VL LoRA bridge, pending the custom archon S2 port."""
+"""Qwen3-VL LoRA GRPO trainers with explicit HF and native archon backends."""
 
 from __future__ import annotations
 
@@ -162,3 +162,32 @@ class Qwen3VLLoRATrainer:
         temporary = path.with_suffix(".tmp.safetensors")
         save_file(weights, str(temporary))
         temporary.replace(path)
+
+
+class NativeQwen3VLLoRATrainer(Qwen3VLLoRATrainer):
+    def __init__(self, model_path: Path, lr: float = 1e-4):
+        from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
+
+        self.model = Qwen3VLModel.from_checkpoint(model_path, "mps")
+        add_lora(self.model)
+        self.model.gradient_checkpointing = True
+        self.parameters = {
+            name: parameter
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad
+        }
+        self.optimizer = torch.optim.AdamW(list(self.parameters.values()), lr=lr)
+
+    def response_logprobs(self, trajectory):
+        ids = trajectory.input_ids.to("mps").unsqueeze(0)
+        positions = torch.nonzero(trajectory.response_mask[1:], as_tuple=True)[0].to(
+            "mps"
+        )
+        logits = self.model(input_ids=ids, logits_to_keep=positions).float()
+        labels = ids[:, 1:][:, positions]
+        return logits.log_softmax(-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+
+    def export_mlx_adapter(self, path: Path):
+        from nano_areal.archon.qwen3vl import export_mlx_lora
+
+        export_mlx_lora(self.model, path)
