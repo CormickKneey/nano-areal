@@ -2,6 +2,42 @@
 
 ## Status: hard-blocked, not S3 acceptance
 
+### Follow-up: parser correction and unchanged fixture, October 30
+
+The installed checkpoint's `chat_template.jinja` explicitly requests JSON
+inside `<tool_call>` tags. `qwen3_xml` expects a different function/parameter
+XML grammar. A production explicit-path diagnostic generated tool tokens but
+returned an empty parsed assistant message with that parser. The proxy's
+empty-message compatibility block consequently appeared as `.` in dsh.
+Use **`--tool-call-parser hermes`** for this checkpoint, not `qwen3_xml`.
+No package source, weights, or tool-choice policy was modified.
+
+The same `BFCLAgent` two-turn fixture was rerun at temperature 0,
+top-p 0.95, max output 128, with automatic tool choice:
+
+| Production parser | Unchanged `List files` / `Again` | Explicit-path diagnostic |
+| --- | --- | --- |
+| `qwen3_xml` | 0/2 | 0/2; empty parsed responses |
+| `hermes` | 0/2; asks for a path | 2/2; parsed `ls(path=".")` both turns |
+
+The unchanged fixture omits the directory while its verifier expects `.`.
+Clarification is therefore understandable, but changing its prompt would
+change the comparison. **The exact acceptance comparison remains failed;
+S3 is not green.** The diagnostic establishes production two-turn tool
+transport, not BFCL benchmark accuracy or quality non-regression.
+
+Reproduce against each matching production server configuration:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/probe_bfcl_tools.py \
+  --parser hermes --output artifacts/s3/bfcl-hermes-final.json
+```
+
+`--parser` labels the evidence; it does not reconfigure the running server.
+Evidence: `artifacts/s3/bfcl-qwen3-xml.json`, `bfcl-hermes.json`, and
+`bfcl-hermes-final.json`. Full responses, usages, tool arguments, and turn
+rewards are retained. Continue only S4 foundations; do not start GRPO.
+
 The production Messages proxy now preserves inline image bytes instead of
 replacing them with `<image>`. An explicitly supplied local HF processor
 expands visual prompt IDs and produces `pixel_values` / `image_grid_thw`.

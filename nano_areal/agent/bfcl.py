@@ -86,11 +86,13 @@ class BFCLAgent(AgentBase):
         temperature: float = 0.8,
         top_p: float = 0.95,
         max_tokens: int = 1024,
+        model_name: str = "default",
     ):
         self.max_turns = max_turns
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+        self.model_name = model_name
         self.reward_fn = BFCLReward()
 
     async def run(
@@ -122,7 +124,7 @@ class BFCLAgent(AgentBase):
                 messages.append(msg)
 
             response = await client.chat.completions.create(
-                model="default",            # proxy rewrites to actual model name
+                model=self.model_name,
                 messages=messages,
                 tools=data.tools or None,
                 tool_choice="auto" if data.tools else None,

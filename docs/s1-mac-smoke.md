@@ -71,7 +71,7 @@ GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0= \
   --served-model-name mlx-community/Qwen3-VL-4B-Instruct-4bit \
   --host 127.0.0.1 --port 8000 --max-model-len 8192 --max-num-seqs 1 \
   --gpu-memory-utilization 0.25 --enable-auto-tool-choice \
-  --tool-call-parser qwen3_xml
+  --tool-call-parser hermes
 # In another terminal, with the same cache environment:
 PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py \
   --server-pid ENGINE_PID
