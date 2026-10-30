@@ -10,9 +10,14 @@ RoPE, native Metal RMS reduction, and bf16 Split-KV partition-output rounding
 complete the prior affine/Split-K/SwiGLU arithmetic. This is not promotion of
 the unbound production reference. See [native training evidence](s4-training.md).
 The original group still has rewards **[1,1]**, advantages **[0,0]** and
-**updates = 0**. A declared eight-start sampling plan follows; no changed
-adapter, v1 feedback or full-checkpoint backward memory is accepted.
-**150 regression tests pass. Full S4 training remains unaccepted.**
+**updates = 0**. Three predeclared batches add **8/24** engineering starts,
+taking cumulative accounting to **32/73, all 41 failures retained**. Fourteen
+new episodes are complete, but the only complete whole group has rewards
+[1,1]; every mixed original group contains a truncation. No subsets or pooled
+rewards qualify. No changed adapter, v1 feedback or full-checkpoint backward
+memory is accepted. **151 regression tests pass. Full S4 training remains
+unaccepted.** The opt-in original /53 preflight also passes at **0.00665944**;
+the historical default-native **0.00486984** remains intact.
 
 Continue7 adds observational paged/prefix layer traces and shared-input
 operator isolation. Short-prefill Split-K and bf16 sigmoid rounding are now

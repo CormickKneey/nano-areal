@@ -338,5 +338,5 @@ if __name__ == "__main__":
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--temperature", type=float, default=0)
     parser.add_argument(
-        "--max-output-tokens", type=int, choices=(512, 1024), default=512)
+        "--max-output-tokens", type=int, choices=(512, 1024, 2048), default=512)
     raise SystemExit(asyncio.run(probe(parser.parse_args())))

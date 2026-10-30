@@ -1,6 +1,6 @@
 # S4 production policy preflight: October 30, 2026
 
-## Continue8: bound native sampled parity passes; update remains gated
+## Continue8: bound native parity passes; complete reward spread still blocked
 
 The explicit native arithmetic runtime passes the original COMPLETE sampled
 HumanEval/0 group at **MAE 0.00969663451268 <= 0.01**, over all **9 turns /
@@ -10,6 +10,16 @@ Its immutable policy/adapter and original group evidence remain unchanged;
 the report binds their hashes to the native arithmetic source hashes.
 `policy_parity_passed=true`, but overall status is still **blocked** because
 external rewards **[1,1]** yield advantages **[0,0]**. **Updates = 0**.
+
+A separate source-bound confirmation reproduces the same MAE in **191.33
+seconds**. A third final-source confirmation after the phase-budget guard,
+`policy-aligned-native-final/preflight.json`, again measures exactly
+**0.009696634512675821**, all nine turns, in **187.30 seconds**. The sole
+blocker remains homogeneous rewards; no optimizer phase runs. The opt-in
+runtime also passes the original deterministic /53
+group at **0.00665944127949**, all **8 turns / 396 tokens**, in **123.59
+seconds** (`policy-aligned-native-53/preflight.json`). Its rewards remain
+homogeneous. The older default-native /53 result is not overwritten.
 
 This qualifies only the measured group and runtime. It does not qualify a
 new sampled group, backward/optimizer/export memory, a changed adapter, or
@@ -57,7 +67,9 @@ It keeps frozen affine weights resident in FP32, bf16 prefill/activations,
 and native FP32 LoRA parameters. Gradient evaluation recomputes the complete
 replay history with per-layer non-reentrant checkpoints; prefix KV is not
 detached or imported from the production trace. A segment-level **600-second**
-runtime budget bounds the path. Operator revision `r1` is not adapter v1.
+runtime budget bounds each phase. After a complete successful preflight,
+the update receives its own 600-second budget; a partial preflight cannot
+renew the budget. Operator revision `r1` is not adapter v1.
 
 The first bound preflight's final forward snapshot is **18,290,435,584 MPS
 allocated / 21,208,186,880 driver bytes**. Swap is **5184.12 -> 4524.69 MiB**.
@@ -88,6 +100,14 @@ score. Production attention observation independently preserves the reference
 **0.00000123694609**, max **0.00016190298**; that reference is not native
 acceptance. Observational capture and native model loads remain sequential.
 
+The corrected independent attention capture
+`continue8-shared-attention-final.json` observes only the first prefill and
+first decode at layers 0/17/35, not every token. Prefill FP32 SDPA activation
+MAEs are **0 / 3.07336450e-8 / 0**. Decode partition-rounding activation MAEs
+are **2.91038305e-11 / 1.78813934e-7 / 1.90734863e-6**, versus unsplit FP32
+**2.24474570e-5 / 0.00018571666 / 0.00085682585**. These observations explain
+the operator choice but do not replace a source-bound whole-group gate.
+
 ### Sampling declaration and next gate
 
 Before fresh starts, `artifacts/s4/continue8-sampling-plan.json` declares
@@ -101,6 +121,78 @@ COMPLETE and reconciled, with genuine external reward spread. Never subset
 episodes, pool tasks, or use truncations/proxy rewards to manufacture advantage.
 At declaration time cumulative sampling remains **24/49, 25 failures retained**;
 planned starts are not completed evidence.
+
+The first declared eight starts completed: /32 **0/4**, eligibility
+**[true,true,true,false]**, with three complete external-test failures and
+one max-tokens failure; /109 **2/4**, eligibility **[false,true,true,true]**,
+with one max-tokens failure, two successes and one complete external-test
+failure. Both entire four-episode groups are ineligible. The complete /109
+failure is real but cannot be extracted from its incomplete original group.
+Cumulative accounting is **26/57 starts, 31 failures retained**.
+
+Only after those results, `continue8-sampling-plan-second.json` declares four
+new independent two-episode /109 groups, in order `pair-a` through `pair-d`,
+with the same temperature 0.8, 1024-token cap, 180-second deadline, instruction
+and external reward. Complete all eight declared starts. Select the first
+informative eligible whole pair in declared order for its own native gate;
+never split the preceding groups, subset a pair or pool rewards across groups.
+
+All eight second-batch starts completed. The ordered pairs have rewards
+**[1,1] / [1,0] / [1,0] / [0,0]**, with eligibility
+**[true,true] / [true,false] / [true,false] / [false,true]**. The first pair
+has zero advantages, and every later pair includes a max-tokens episode.
+This adds **4/8**, taking cumulative accounting to **30/65, 35 failures**.
+
+After that batch, `continue8-sampling-plan-third.json` declares four new
+independent /109 pairs, `long-a` through `long-d`, before any starts, with
+temperature 0.8, **2048 output tokens / 240-second activity deadline**.
+This is another explicit bounded completion-budget increase, not a relaxed
+reward, eligibility or numerical gate; the CLI default stays 512. Complete
+all eight starts and use the same first-eligible-whole-group selection rule.
+
+The third batch also completed all eight starts. Its ordered reward pairs
+are **[0,0] / [0,0] / [1,0] / [0,1]**, with eligibility
+**[false,true] / [false,false] / [true,false] / [false,true]**. Every pair
+contains a max-tokens failure; none can supply a valid negative advantage.
+The extra completion budget did not establish completion, so no larger
+unbounded sampling or optimizer run is inferred from it.
+
+### Final sampling ledger and remaining gate
+
+All outputs below are ignored under `artifacts/s4/`; no solutions, hidden
+tests, weights or raw sessions are committed. Each row is its entire
+predeclared group, not a selected episode subset.
+
+| Output suffix | Episodes | Passed | Eligible | Outcome |
+| --- | ---: | ---: | ---: | --- |
+| policy-continue8-32 | 4 | 0 | 3 | Three complete failures, one truncation |
+| policy-continue8-109 | 4 | 2 | 3 | Mixed rewards, one truncation |
+| policy-continue8-109-pair-a | 2 | 2 | 2 | Complete, rewards [1,1], zero advantage |
+| policy-continue8-109-pair-b | 2 | 1 | 1 | One success, one truncation |
+| policy-continue8-109-pair-c | 2 | 1 | 1 | One success, one truncation |
+| policy-continue8-109-pair-d | 2 | 0 | 1 | One truncation, one complete failure |
+| policy-continue8-109-long-a | 2 | 0 | 1 | One truncation, one complete failure |
+| policy-continue8-109-long-b | 2 | 0 | 0 | Two truncations |
+| policy-continue8-109-long-c | 2 | 1 | 1 | One success, one truncation |
+| policy-continue8-109-long-d | 2 | 1 | 1 | One truncation, one success |
+
+This continuation adds **8/24** engineering starts: **14** complete eligible
+episodes (eight successes and six genuine external-test failures), plus
+**10** ineligible max-tokens failures. Cumulative declared sampling is now
+**32/73 starts, all 41 failures retained**, not HumanEval accuracy. No new
+informative COMPLETE group exists. Do not combine the six valid failures
+with successes from another original group or treat the ten truncations as
+negative-advantage episodes. The numerical gate is qualified only for its
+measured original /0 and /53 groups, not hypothetical future groups.
+
+**Updates remain 0.** The owned production API and engine are stopped before
+native validation; no serving/native co-residency is introduced. No changed
+adapter, immutable v1, v1 feedback or full-checkpoint backward/optimizer/export
+memory gate exists. Full S4 training remains unaccepted. Next work starts
+with a newly declared genuinely informative COMPLETE group, then that whole
+group's native MAE <= 0.01 preflight, before one bounded update. Regression
+validation passes **151 tests in 9.71 seconds**, targeted Ruff and
+`git diff --check`; tests do not substitute for training measurements.
 
 For native reproduction, use a fresh output directory containing a byte-copy
 of the original `policy-v0.json` and an `adapter-v0` symlink to the original
