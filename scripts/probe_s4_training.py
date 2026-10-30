@@ -34,6 +34,32 @@ def restore(trainer, adapter):
         raise ValueError("Unexpected adapter tensors")
 
 
+def complete_group(directory, binding):
+    summary = json.loads((directory / "report.json").read_text())
+    count = summary["planned"]
+    if not 2 <= count <= 8 or summary["attempted"] != count:
+        raise ValueError("Preflight requires a complete declared episode group")
+    if len(summary["episodes"]) != count:
+        raise ValueError("Missing episode accounting")
+    episodes = []
+    for index, row in enumerate(summary["episodes"]):
+        if row["index"] != index or not row.get("training_eligible", row["passed"]):
+            raise ValueError("Incomplete or unreconciled episode cannot train")
+        episode = json.loads((directory / f"episode-{index}.json").read_text())
+        if (episode["episode"] != index or episode["policy"]
+                != {"model": binding.model, "version": binding.version}):
+            raise ValueError("Episode policy provenance mismatch")
+        verification = row["result"]["verification"]
+        if (episode["reward"] != row["result"]["verified_reward"]
+                or episode["reward"] != verification["pass_rate"]
+                or not 0 <= episode["reward"] <= 1):
+            raise ValueError("Episode reward differs from external verification")
+        if not episode["turns"] or any(item["truncated"] for item in episode["turns"]):
+            raise ValueError("Empty or truncated group cannot be used for training")
+        episodes.append(episode)
+    return episodes
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "preflight"))
@@ -43,11 +69,13 @@ def main():
     parser.add_argument("--group", type=Path)
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
     args = parser.parse_args()
+    if not 0 < args.max_logprob_mae <= 0.01:
+        parser.error("The behavior MAE bound must be positive and at most 0.01")
     args.output.mkdir(parents=True, exist_ok=True)
     path = args.output / f"{args.phase}.json"
     report = {
         "status": "started", "phase": args.phase,
-        "scope": "S4 native bf16 / production 4-bit training preflight",
+        "scope": "S4 native / production training preflight",
         "memory_before": memory_snapshot(os.getpid()),
         "updates": 0, "elapsed_seconds": 0,
     }
@@ -92,7 +120,7 @@ def main():
                     str(item.resolve()): file_digest(item)
                     for item in sorted(adapter.iterdir()) if item.is_file()
                 },
-                "training_base": "native archon bf16",
+                "training_base": str(args.train_model.resolve()),
                 "inference_base": "production vllm-metal MLX 4-bit",
                 "base_equivalence": "unverified; must measure behavior logprobs",
             })
@@ -101,21 +129,17 @@ def main():
         else:
             binding = PolicyBinding.read(manifest_path)
             binding.verify_files()
+            if (checkpoint_files(args.train_model) != binding.manifest["training_files"]
+                    or checkpoint_files(args.infer_model)
+                    != binding.manifest["inference_files"]):
+                raise ValueError("Requested checkpoint differs from bound policy")
             restore(trainer, adapter)
-            summary = json.loads((args.group / "report.json").read_text())
-            if (summary["attempted"] != 2 or summary["passed"] != 2
-                    or summary["planned"] != 2):
-                raise ValueError(
-                    "Preflight requires a complete fixed two-episode group"
-                )
+            episodes = complete_group(args.group, binding)
             report["group"] = str(args.group)
             report["turns"] = []
             rewards = []
             total_error, total_tokens = 0.0, 0
-            for index in range(2):
-                episode = json.loads((args.group / f"episode-{index}.json").read_text())
-                if episode["policy"] != {"model": binding.model, "version": 0}:
-                    raise ValueError("Episode policy provenance mismatch")
+            for index, episode in enumerate(episodes):
                 rewards.append(episode["reward"])
                 for turn, item in enumerate(episode["turns"]):
                     if item["truncated"]:
@@ -154,7 +178,8 @@ def main():
             )
             report["episode_rewards"] = rewards
             advantages, _ = group_advantages(
-                torch.tensor(rewards), 2, group_ids=["fixed-task"] * 2
+                torch.tensor(rewards), len(rewards),
+                group_ids=["fixed-task"] * len(rewards),
             )
             report["episode_advantages"] = advantages.tolist()
             report["reward_spread"] = max(rewards) - min(rewards)

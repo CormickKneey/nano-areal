@@ -1,5 +1,49 @@
 # S4 production policy preflight: October 30, 2026
 
+## Aligned-base continuation
+
+`scripts/align_s4_base.py` exports the actual served affine 4-bit tensors using
+MLX dequantization, restores HF key layout and Conv3D axes, and records source
+and output hashes. It preserves all 713 tensors, dequantizing 253 language
+modules including the tied embedding. The original checkpoints and S1/S2
+loaders are unchanged. Conversion alone does not assert numerical parity.
+
+The old captured group diagnostic has MAE **0.00516071** after alignment,
+versus the retained **0.10248081** original-base result. This diagnostic is
+not a bound-policy rollout. A fresh immutable v0 and fresh production
+HumanEval/53 group (`artifacts/s4/policy-aligned-53`) pass **2/2** official
+external pytest files with exact reconciliation. With serving stopped,
+`policy-aligned/preflight.json` measures MAE **0.00486984**, below the unchanged
+**0.01** bound, in **46.26 seconds**. Rewards **[1,1]** still give advantages
+**[0,0]**; no update is performed. These two starts increase the retained
+engineering denominator from **17/31** to **19/33**, not benchmark accuracy.
+
+The next declared sampling plan is two complete episodes per task at
+temperature **0.8**, first HumanEval/0, then HumanEval/32 if needed, with the
+same prompt, 512-token turn cap, 120-second activity timeout, and unchanged
+official external rewards. Do not select only successful episodes: complete,
+reconciled external-test failures are exported with their original reward;
+timeouts, truncations and accounting failures remain in the exploration
+denominator but are ineligible for updates. All-success groups remain zero.
+The coding acceptance report still requires success; training eligibility
+is a separate field and never converts a failed check into a coding pass.
+
+Reproduce conversion with the repository-local Metal Python environment:
+
+```bash
+PYTHONPATH=. .s1-cache/venv-metal/bin/python scripts/align_s4_base.py \
+  --source .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+  --output .s1-cache/models/Qwen3-VL-4B-Instruct-aligned
+```
+
+Use the existing prepare/serve/probe/stop/preflight sequence below with the
+aligned training path and fresh evidence directories. Never overwrite a
+converted snapshot, edit an old manifest, or reuse captured probabilities as
+though they came from another version. The preflight now checks requested
+checkpoint paths/hashes against the binding and rejects an MAE bound above
+0.01. Full training, nonzero export, feedback and backward memory remain
+unaccepted pending subsequent measurements.
+
 ## Result: training acceptance blocked, not a completed update
 
 S1/S2 and the measured S3 gates remain unchanged. The coding gates remain

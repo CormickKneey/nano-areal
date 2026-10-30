@@ -81,6 +81,28 @@ class AuditProxy(OpenAIProxyServer):
         return result
 
 
+def training_eligible(row, trajectories):
+    verification = row["result"].get("verification", {})
+    return bool(
+        row["reconciliation"]["matched"]
+        and row.get("session_logs") == 1
+        and not row.get("error_type")
+        and not row["failed_proxy_requests"]
+        and not row["failed_dsh_attempts"]
+        and not row["cancelled_requests"]
+        and row["tool_turns"] >= 2
+        and row.get("exported_interactions") == len(trajectories) > 0
+        and not any(item.truncated for item in trajectories)
+        and row["result"].get("finish_reason") == "completed"
+        and verification.get("runner") == "pytest"
+        and verification.get("total", 0) > 0
+        and len(verification.get("outcomes", [])) == verification["total"]
+        and all(item["status"] in {"passed", "failed", "collection-error"}
+                for item in verification["outcomes"])
+        and row["result"].get("verified_reward") == verification["pass_rate"]
+    )
+
+
 async def probe(args):
     root = args.task_root.resolve()
     hidden = args.hidden_tests.resolve()
@@ -186,6 +208,7 @@ async def probe(args):
                            args.output / f"setup-failure-{index}")
             capture.mkdir(parents=True, exist_ok=True)
             logs = list(capture.glob("dsh-home/sessions/*/*/session.v4.jsonl"))
+            row["session_logs"] = len(logs)
             events = [
                 json.loads(line)
                 for log in logs
@@ -251,7 +274,8 @@ async def probe(args):
                 if tool_turns < 2
                 else "verification-failed"
             )
-            if binding and row["passed"]:
+            row["training_eligible"] = training_eligible(row, trajectories)
+            if binding and row["training_eligible"]:
                 binding.verify_catalog((await proxy._vllm.models.list()).model_dump())
                 export = {
                     "policy": {"model": binding.model, "version": binding.version},
