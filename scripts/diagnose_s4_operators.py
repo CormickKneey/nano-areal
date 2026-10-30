@@ -6,6 +6,7 @@ import argparse
 import json
 import time
 from pathlib import Path
+from types import MethodType
 
 import torch
 from align_s4_base import hf_key
@@ -13,10 +14,20 @@ from probe_s4_training import complete_group, require_stopped_server, restore
 from safetensors import safe_open
 
 from nano_areal.archon import model as native_model
+from nano_areal.archon import s4_metal as metal_source
 from nano_areal.archon import s4_trace as trace_source
 from nano_areal.archon.model import RMSNorm
 from nano_areal.archon.qwen3vl_lora import NativeQwen3VLLoRATrainer
-from nano_areal.archon.s4_operators import affine_decode, rounded_swiglu, splitk_prefill
+from nano_areal.archon.s4_metal import metal_rms
+from nano_areal.archon.s4_operators import (
+    affine_decode,
+    affine_decode_weights,
+    affine_weights,
+    device_rope_frequencies,
+    rounded_swiglu,
+    splitk_prefill,
+    splitkv_attention,
+)
 from nano_areal.archon.s4_replay import cached_text_logprobs
 from nano_areal.archon.s4_trace import LayerTrace, native_trace_hooks
 from nano_areal.archon.s4_update import trajectory_from_turn
@@ -30,14 +41,18 @@ def main():
     parser.add_argument("--group", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fused-rms", action="store_true")
+    parser.add_argument("--metal-rms", action="store_true")
     parser.add_argument("--dense-projections", action="store_true")
     parser.add_argument("--splitk-prefill", action="store_true")
     parser.add_argument("--fp32-rope", action="store_true")
+    parser.add_argument("--device-rope-init", action="store_true")
     parser.add_argument("--fused-swiglu", action="store_true")
     parser.add_argument("--rounded-swiglu", action="store_true")
     parser.add_argument("--dense-head", action="store_true")
     parser.add_argument("--prefill-head", action="store_true")
     parser.add_argument("--fp32-attention", action="store_true")
+    parser.add_argument("--paged-attention", action="store_true")
+    parser.add_argument("--resident-affine", action="store_true")
     parser.add_argument("--cached-execution", action="store_true")
     parser.add_argument("--prefix-reuse", action="store_true")
     parser.add_argument("--max-seconds", type=float, default=600)
@@ -50,6 +65,13 @@ def main():
         parser.error("Split-K prefill requires cached execution")
     if args.rounded_swiglu and args.fused_swiglu:
         parser.error("Choose exactly one SwiGLU diagnostic")
+    if args.paged_attention and args.fp32_attention:
+        parser.error("Choose exactly one attention diagnostic")
+    if args.metal_rms and args.fused_rms:
+        parser.error("Choose exactly one RMS diagnostic")
+    if args.resident_affine and (not args.cached_execution or args.dense_projections
+                                 or args.dense_head or args.prefill_head):
+        parser.error("Resident affine requires fully affine cached execution")
     if not 0 < args.max_seconds <= 600:
         parser.error("Diagnostic deadline must be in (0, 600] seconds")
     if args.output.exists():
@@ -67,6 +89,10 @@ def main():
     trainer = NativeQwen3VLLoRATrainer(Path(binding.manifest["training_base"]))
     restore(trainer, Path(binding.manifest["adapter"]))
     trainer.model.eval()
+    if args.device_rope_init:
+        rope = trainer.model.language_model.rope
+        rope.inv_freq.copy_(device_rope_frequencies(
+            trainer.model.config["text_config"], rope.inv_freq.device))
     quantized = {}
     source = {Path(name) for name in binding.manifest["inference_files"]
               if name.endswith(".safetensors")}
@@ -92,8 +118,26 @@ def main():
         return device_quantized[name]
 
     handles = []
+    resident_forwards = []
     original_rope = native_model.apply_rope
     original_attention = torch.nn.functional.scaled_dot_product_attention
+    if args.paged_attention:
+        def paged_attention(query, key, value, *arguments, **options):
+            start = context["decode_start"]
+            if start >= query.shape[-2]:
+                return original_attention(
+                    query.float(), key.float(), value.float(), *arguments, **options
+                ).to(query.dtype)
+            if args.cached_execution:
+                return splitkv_attention(query, key, value, key.shape[-2] - 1)
+            prefill = original_attention(
+                query[..., :start, :].float(), key[..., :start, :].float(),
+                value[..., :start, :].float(), is_causal=True,
+            ).to(query.dtype)
+            decode = splitkv_attention(query[..., start:, :], key, value, start)
+            return torch.cat((prefill, decode), dim=-2)
+
+        torch.nn.functional.scaled_dot_product_attention = paged_attention
     if args.fp32_attention:
         def attention(query, key, value, *arguments, **options):
             output = original_attention(
@@ -134,11 +178,32 @@ def main():
 
     for name, module in trainer.model.named_modules():
         mapped = name.removesuffix(".base")
+        if (args.resident_affine and isinstance(module, torch.nn.Linear)
+                and mapped in quantized):
+            packed, scales, biases = (tensor.to(module.weight.device)
+                                       for tensor in quantized[mapped])
+            module.weight.data = affine_weights(packed, scales, biases)
+            resident_forwards.append((module, module.forward))
+
+            def resident_forward(module, hidden, biases=biases):
+                if context["decode_start"] >= hidden.shape[-2]:
+                    weight = module.weight.bfloat16()
+                    if args.splitk_prefill and hidden.shape[-2] >= 16:
+                        return splitk_prefill(hidden, weight)
+                    return torch.nn.functional.linear(hidden, weight)
+                return affine_decode_weights(hidden, module.weight, biases)
+
+            module.forward = MethodType(resident_forward, module)
         if (isinstance(module, torch.nn.Linear) and mapped in quantized
-                and (not args.dense_projections or args.splitk_prefill)):
+                and (not args.dense_projections or args.splitk_prefill)
+                and not args.resident_affine):
             handles.append(module.register_forward_hook(projection(mapped)))
         if args.fused_rms and isinstance(module, RMSNorm):
             handles.append(module.register_forward_hook(fused_rms))
+        if args.metal_rms and isinstance(module, RMSNorm):
+            handles.append(module.register_forward_hook(
+                lambda module, inputs, output: metal_rms(
+                    inputs[0], module.weight, module.eps)))
 
     def capture_head(module, inputs, output):
         context["hidden"] = output
@@ -171,6 +236,15 @@ def main():
     handles.append(trainer.model.language_model.norm.register_forward_hook(
         capture_head
     ))
+    resident_head = None
+    if args.resident_affine:
+        packed, scales, biases = quantized_on_device(
+            "language_model.embed_tokens", "mps")
+        resident_head = affine_weights(packed, scales, biases), biases
+        device_quantized.clear()
+        del packed, scales, biases
+        torch.mps.synchronize()
+        torch.mps.empty_cache()
     evidence = [args.policy, args.group / "report.json", *[
         args.group / f"episode-{index}.json" for index in range(len(episodes))
     ]]
@@ -187,20 +261,25 @@ def main():
                           "s4_operators.py"
                       ), Path(native_model.__file__).with_name("s4_replay.py"),
                       Path(trace_source.__file__),
+                      Path(metal_source.__file__),
                   )
               },
               "planned_turns": sum(len(item["turns"]) for item in episodes),
               "policy": binding.model, "group": str(args.group), "updates": 0,
               "operator": "fp32 affine weights plus bf16 four-value bias sum rounding",
               "fused_rms": args.fused_rms,
+              "metal_rms": args.metal_rms,
               "dense_projections": args.dense_projections,
               "splitk_prefill": args.splitk_prefill,
               "fp32_rope": args.fp32_rope,
+              "device_rope_init": args.device_rope_init,
               "fused_swiglu": args.fused_swiglu,
               "rounded_swiglu": args.rounded_swiglu,
               "dense_head": args.dense_head,
               "prefill_head": args.prefill_head,
               "fp32_attention": args.fp32_attention,
+              "paged_attention": args.paged_attention,
+              "resident_affine": args.resident_affine,
               "cached_execution": args.cached_execution,
               "prefix_reuse": args.prefix_reuse,
               "max_seconds": args.max_seconds,
@@ -230,6 +309,8 @@ def main():
                             context["decode_start"] = end if end == prompt else 0
 
                         def project_head(hidden, start, end):
+                            if resident_head is not None:
+                                return affine_decode_weights(hidden, *resident_head)
                             if args.dense_head or (args.prefill_head and end == prompt):
                                 return torch.nn.functional.linear(
                                     hidden,
@@ -301,6 +382,9 @@ def main():
         torch.nn.functional.scaled_dot_product_attention = original_attention
         for handle in handles:
             handle.remove()
+        for module, forward in resident_forwards:
+            module.forward = forward
+            module.weight.data = module.weight.data.bfloat16()
     print(json.dumps({key: value for key, value in report.items()
                       if key not in ("turns", "layerwise")}))
 

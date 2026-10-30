@@ -2,6 +2,18 @@
 
 ## Status: bounded coding gate passes; training remains unaccepted
 
+Continue8 closes the original sampled /0 numerical gate in an explicit,
+source-bound native runtime: **0.00969663451268 MAE <= 0.01**, all **9 turns /
+636 response tokens**, repeated with the same result. The original default
+native **0.01112227** failure remains historical evidence. Device-initialized
+RoPE, native Metal RMS reduction, and bf16 Split-KV partition-output rounding
+complete the prior affine/Split-K/SwiGLU arithmetic. This is not promotion of
+the unbound production reference. See [native training evidence](s4-training.md).
+The original group still has rewards **[1,1]**, advantages **[0,0]** and
+**updates = 0**. A declared eight-start sampling plan follows; no changed
+adapter, v1 feedback or full-checkpoint backward memory is accepted.
+**150 regression tests pass. Full S4 training remains unaccepted.**
+
 Continue7 adds observational paged/prefix layer traces and shared-input
 operator isolation. Short-prefill Split-K and bf16 sigmoid rounding are now
 independently reproduced; native RMSNorm should not be replaced with a

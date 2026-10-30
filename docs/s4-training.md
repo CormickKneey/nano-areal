@@ -1,5 +1,125 @@
 # S4 production policy preflight: October 30, 2026
 
+## Continue8: bound native sampled parity passes; update remains gated
+
+The explicit native arithmetic runtime passes the original COMPLETE sampled
+HumanEval/0 group at **MAE 0.00969663451268 <= 0.01**, over all **9 turns /
+636 response tokens**, in **188.33 seconds** including initialization. This
+is `artifacts/s4/policy-aligned-native/preflight.json`, not an MLX replay score.
+Its immutable policy/adapter and original group evidence remain unchanged;
+the report binds their hashes to the native arithmetic source hashes.
+`policy_parity_passed=true`, but overall status is still **blocked** because
+external rewards **[1,1]** yield advantages **[0,0]**. **Updates = 0**.
+
+This qualifies only the measured group and runtime. It does not qualify a
+new sampled group, backward/optimizer/export memory, a changed adapter, or
+v1 production feedback. **Full S4 training is NOT accepted.** The historical
+default-native /0 **0.01112226647**, deterministic /53 **0.00486984055**, and
+unaligned **0.10771345 / 0.10248081** measurements remain intact. S1/S2/S3 and
+bounded coding acceptance are unchanged; no existing default is replaced.
+
+### Remaining arithmetic distinguished
+
+- **Initialize rotary frequencies on the executing device.** CPU-created
+  FP32 inverse frequencies differ from MLX Metal by up to 5.96046448e-8.
+  Computing the same power expression on MPS matches the independently
+  generated MLX frequencies and bf16 trig tables for positions 0–2047 exactly.
+  On the original production trace, native device-initialized RoPE matches
+  **648/648 Q and 648/648 K rows**, versus the previous 397/648 and 425/648.
+  Products remain bf16; no all-FP32 RoPE replacement is used.
+- **Decode attention rounds partition outputs before merging.** The installed
+  production fallback dispatch splits this single-sequence decode into
+  512-token partitions even below 4096 context tokens, according to its
+  occupancy gate. Partition softmax/accumulation is FP32, normalized partition
+  outputs are stored in bf16, and the reducer merges those rounded outputs
+  with FP32 exp-sum weights. One unsplit FP32 SDPA call is not equivalent.
+  Independent actual-kernel fixtures cover CPU/MPS references, masked future
+  partitions, vectorized causal rows and finite nonzero input gradients.
+- **Preserve two-stage RMS rounding, but match its reduction.** The new native
+  Metal diagnostic uses four-value per-thread FP32 accumulation, SIMD/group
+  reductions and precise reciprocal square root, then casts normalized values
+  to bf16 before multiplying bf16 norm weights. This is not the rejected
+  single-rounding RMS replacement. On shared production inputs all four norm
+  types, including Q, now match **648/648 rows exactly**. An opt-in first-order
+  autograd implementation also passes small independent forward/gradient
+  tests; this is not a measured full-checkpoint backward result.
+- **Keep the verified prior arithmetic.** Short-prefill Split-K, bf16 sigmoid
+  intermediates, and affine decode four-value bias sums remain necessary.
+  Shared-input first-layer projections compare 63 prefill and 63 decode rows:
+  corrected split reduction and bias rounding have mean activation MAEs
+  **8.60698513e-9 / 1.30970544e-8**, respectively. These activation metrics are
+  not token-weighted policy gate scores.
+
+The complete native cached diagnostic with all corrections measures
+**0.00969663444614** in **169.96 seconds**. The subsequent actual preflight
+above uses `AlignedS4Runtime`, not a diagnostic hook installed as a default.
+It keeps frozen affine weights resident in FP32, bf16 prefill/activations,
+and native FP32 LoRA parameters. Gradient evaluation recomputes the complete
+replay history with per-layer non-reentrant checkpoints; prefix KV is not
+detached or imported from the production trace. A segment-level **600-second**
+runtime budget bounds the path. Operator revision `r1` is not adapter v1.
+
+The first bound preflight's final forward snapshot is **18,290,435,584 MPS
+allocated / 21,208,186,880 driver bytes**. Swap is **5184.12 -> 4524.69 MiB**.
+These are forward snapshots, **not backward peaks or a memory acceptance**.
+
+### Retained counterfactuals
+
+All complete rows use the entire unchanged /0 group; no episode or token
+subset is accepted. Files are ignored under `artifacts/s4/policy-aligned-audit/`.
+
+| File prefix (`.json`) | MAE | Seconds |
+| --- | ---: | ---: |
+| continue8-full-affine-rounded | 0.01082937519 | 66.70 |
+| continue8-full-affine-device-rope | 0.01158532291 | 65.89 |
+| continue8-dense-device-rope | 0.01098795013 | 43.92 |
+| continue8-full-splitkv-device-rope | 0.01134980014 | 70.32 |
+| continue8-cached-splitkv | 0.01327270881 | 170.18 |
+| continue8-cached-metal-rms | 0.00969663445 | 169.96 |
+| continue8-dense-metal-rms | 0.01012256273 | 42.83 |
+| continue8-dense-metal-splitkv | 0.01190115122 | 45.98 |
+| continue8-dense-metal-affine-head | 0.01096810926 | 43.57 |
+
+The uncached/full-forward near miss **0.01012256273** still fails **0.01**.
+The early uncached-weight cached experiment was stopped with owned SIGINT;
+`continue8-cached-affine-rounded.json` retains `KeyboardInterrupt`, **301.04
+seconds**, **1/9 turns / 21/636 tokens**. Its partial 0.01660425 is not a group
+score. Production attention observation independently preserves the reference
+**0.00000123694609**, max **0.00016190298**; that reference is not native
+acceptance. Observational capture and native model loads remain sequential.
+
+### Sampling declaration and next gate
+
+Before fresh starts, `artifacts/s4/continue8-sampling-plan.json` declares
+HumanEval/32 then /109, four episodes each, temperature 0.8, no seed, fresh
+workspaces, **1024 output tokens / 180-second activity deadline**, unchanged
+generic read/write/bash instruction and official external pytest rewards.
+The larger completion budget is explicit, not a reward or MAE threshold
+change; the probe default remains 512 tokens. Every started failure stays in
+the denominator. Require each entire original four-episode group to be
+COMPLETE and reconciled, with genuine external reward spread. Never subset
+episodes, pool tasks, or use truncations/proxy rewards to manufacture advantage.
+At declaration time cumulative sampling remains **24/49, 25 failures retained**;
+planned starts are not completed evidence.
+
+For native reproduction, use a fresh output directory containing a byte-copy
+of the original `policy-v0.json` and an `adapter-v0` symlink to the original
+immutable adapter. Keep production stopped, then run:
+
+```bash
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+.venv/bin/python scripts/probe_s4_training.py preflight \
+  --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+  --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+  --output artifacts/s4/policy-aligned-native-reproduce \
+  --group artifacts/s4/policy-sampled-0 --aligned-arithmetic
+# Expected overall exit 2 for this zero-advantage group; numerical gate passes.
+```
+
+No update/export/feedback acceptance follows from this numerical pass.
+
 ## Continue7: layerwise arithmetic isolated; gate 1 remains blocked
 
 No production/native default, training runtime, policy manifest, original

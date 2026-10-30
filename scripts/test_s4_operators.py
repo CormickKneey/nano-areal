@@ -7,14 +7,154 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from diagnose_s4_projections import projection_variants
 
 from nano_areal.archon.s4_operators import (
     affine_decode,
+    affine_decode_weights,
     affine_weights,
+    device_rope_frequencies,
     prefill_split_count,
     rounded_swiglu,
     splitk_prefill,
+    splitkv_attention,
 )
+
+
+def test_shared_projection_uses_original_prefill_shape():
+    packed = torch.full((256, 128), 0x76543210, dtype=torch.int64)
+    scales = torch.full((256, 16), 0.015625, dtype=torch.bfloat16)
+    biases = torch.full_like(scales, -0.05)
+    weights = affine_weights(packed, scales, biases).bfloat16()
+    hidden = torch.randn(1, 1024, dtype=torch.bfloat16)
+    variants = projection_variants(hidden, weights, packed, scales, biases, 128)
+    expected = splitk_prefill(hidden[:, None].expand(1, 128, 1024), weights)[:, -1]
+    torch.testing.assert_close(variants["splitk_bf16"], expected, rtol=0, atol=0)
+    decode = projection_variants(hidden, weights, packed, scales, biases, 1)
+    assert "splitk_bf16" not in decode
+    torch.testing.assert_close(decode["affine_bias_rounding"],
+                               affine_decode(hidden, packed, scales, biases))
+
+
+def test_device_rope_config_contract():
+    config = {"head_dim": 128, "rope_theta": 5000000}
+    actual = device_rope_frequencies(config, "cpu")
+    torch.testing.assert_close(actual, 1 / 5000000 ** (torch.arange(64).float() / 64))
+    nested = {"head_dim": 128, "rope_parameters": {"rope_theta": 10000}}
+    assert not torch.equal(actual, device_rope_frequencies(nested, "cpu"))
+    with pytest.raises(ValueError, match="default rotary"):
+        device_rope_frequencies(
+            {**config, "rope_scaling": {"rope_type": "yarn"}}, "cpu")
+
+
+def test_resident_affine_preserves_values_and_input_gradients():
+    packed = torch.full((8, 8), 0x76543210, dtype=torch.int64)
+    scales = torch.full((8, 1), 0.015625, dtype=torch.bfloat16)
+    biases = torch.full_like(scales, -0.05)
+    hidden = torch.randn(2, 64, dtype=torch.bfloat16, requires_grad=True)
+    actual = affine_decode_weights(
+        hidden, affine_weights(packed, scales, biases), biases)
+    expected = affine_decode(hidden, packed, scales, biases)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    actual.float().square().mean().backward()
+    assert bool(torch.isfinite(hidden.grad).all()) and bool(hidden.grad.abs().any())
+    with pytest.raises(ValueError, match="matching fp32"):
+        affine_decode_weights(
+            hidden, affine_weights(packed, scales, biases).half(), biases)
+
+
+def test_splitkv_masks_future_partitions_and_has_finite_gradients():
+    query = torch.randn(1, 2, 3, 8, dtype=torch.bfloat16, requires_grad=True)
+    key = torch.randn(1, 2, 1025, 8, dtype=torch.bfloat16, requires_grad=True)
+    value = torch.randn_like(key, requires_grad=True)
+    actual = splitkv_attention(query, key, value, 510)
+    rows = torch.cat([splitkv_attention(query[..., index:index + 1, :],
+                                      key[..., :511 + index, :],
+                                      value[..., :511 + index, :], 510 + index)
+                      for index in range(3)], dim=-2)
+    torch.testing.assert_close(actual, rows, rtol=0, atol=0)
+    actual.float().square().mean().backward()
+    for gradient in (query.grad, key.grad, value.grad):
+        assert bool(torch.isfinite(gradient).all()) and bool(gradient.abs().any())
+    assert not bool(key.grad[..., 513:, :].any())
+    with pytest.raises(ValueError, match="compatible bf16"):
+        splitkv_attention(query.float(), key, value, 510)
+
+
+def test_mlx_paged_splitkv_rounding(tmp_path):
+    executable = Path(".s1-cache/venv-metal/bin/python")
+    if not executable.exists() or not torch.backends.mps.is_available():
+        pytest.skip("Repository-local MLX and MPS are required")
+    program = '''
+import mlx.core as mx
+import numpy as np
+from pathlib import Path
+from vllm_metal.metal import get_ops
+directory = Path(DIRECTORY)
+ops = get_ops()
+mx.random.seed(44)
+query = mx.random.normal((4, 32, 128)).astype(mx.bfloat16)
+key = mx.random.normal((73, 16, 8, 128)).astype(mx.bfloat16)
+value = mx.random.normal(key.shape).astype(mx.bfloat16)
+output = []
+for index in range(4):
+    end = 1155 + index
+    output.append(ops.paged_attention_primitive(
+        query[index:index + 1], key, value, 8, 128 ** -0.5, 0.,
+        mx.arange(73, dtype=mx.uint32)[None], mx.array([end], dtype=mx.uint32),
+        mx.array([0, 1], dtype=mx.uint32), 16, end, -1))
+arrays = {"query": query, "key": key.reshape(-1, 8, 128)[:1158],
+          "value": value.reshape(-1, 8, 128)[:1158],
+          "output": mx.concatenate(output)}
+for name, tensor in arrays.items():
+    np.save(directory / (name + ".npy"), np.asarray(tensor.astype(mx.float32)))
+'''
+    subprocess.run(
+        [str(executable), "-c", program.replace("DIRECTORY", repr(str(tmp_path)))],
+        env={**os.environ}, check=True, capture_output=True, text=True, timeout=60,
+    )
+    arrays = {name: torch.from_numpy(np.load(tmp_path / f"{name}.npy"))
+              for name in ("query", "key", "value", "output")}
+    expected = arrays["output"].transpose(0, 1)[None]
+    for device in ("cpu", "mps"):
+        query = arrays["query"].transpose(0, 1)[None].to(device).bfloat16()
+        key, value = [arrays[name].transpose(0, 1)[None].repeat_interleave(
+            4, dim=1).to(device).bfloat16() for name in ("key", "value")]
+        actual = splitkv_attention(query, key, value, 1154).float().cpu()
+        error = (actual - expected).abs()
+        assert float(error.mean()) < 2e-6
+        assert float(error.max()) < 0.002
+
+
+def test_mlx_mps_initialized_rope_constants(tmp_path):
+    executable = Path(".s1-cache/venv-metal/bin/python")
+    if not executable.exists() or not torch.backends.mps.is_available():
+        pytest.skip("Repository-local MLX and MPS are required")
+    program = '''
+import mlx.core as mx
+import numpy as np
+from pathlib import Path
+directory = Path(DIRECTORY)
+freq = 1 / (5000000 ** (mx.arange(0, 128, 2).astype(mx.float32) / 128))
+angle = mx.arange(2048).astype(mx.float32)[:, None] * freq
+for name, value in {"freq": freq, "cos": mx.cos(angle).astype(mx.bfloat16),
+                    "sin": mx.sin(angle).astype(mx.bfloat16)}.items():
+    np.save(directory / (name + ".npy"), np.asarray(value.astype(mx.float32)))
+'''
+    subprocess.run(
+        [str(executable), "-c", program.replace("DIRECTORY", repr(str(tmp_path)))],
+        env={**os.environ}, check=True, capture_output=True, text=True, timeout=60,
+    )
+    arrays = {name: torch.from_numpy(np.load(tmp_path / f"{name}.npy"))
+              for name in ("freq", "cos", "sin")}
+    config = {"head_dim": 128, "rope_theta": 5000000}
+    frequency = device_rope_frequencies(config, "mps")
+    torch.testing.assert_close(frequency.cpu(), arrays["freq"], rtol=0, atol=0)
+    assert not torch.equal(device_rope_frequencies(config, "cpu"), arrays["freq"])
+    angles = torch.arange(2048, device="mps").float()[:, None] * frequency
+    for name, value in (("cos", angles.cos()), ("sin", angles.sin())):
+        torch.testing.assert_close(value.bfloat16().float().cpu(), arrays[name],
+                                   rtol=0, atol=0)
 
 
 def test_affine_unpack_and_decode_gradients():

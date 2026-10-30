@@ -34,6 +34,7 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
     started = time.monotonic()
     loss_sum = 0.0
     ratios = []
+    turn_index = 0
     for index, episode in enumerate(episodes):
         token_count = sum(sum(turn["response_mask"]) for turn in episode["turns"])
         if not token_count:
@@ -42,6 +43,8 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
             if time.monotonic() - started > max_seconds:
                 raise TimeoutError("Bounded optimizer wall-clock limit exceeded")
             trajectory, old = trajectory_from_turn(turn)
+            if hasattr(trainer, "select_turn"):
+                trainer.select_turn(turn_index)
             trainer.model.eval()
             with torch.no_grad(), trainer.model.disable_adapter():
                 reference = trainer.response_logprobs(trajectory)
@@ -63,6 +66,7 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
             loss_sum += float(loss.detach()) * weight
             ratios.append(stats["ratio_mean"])
             del current, reference, loss
+            turn_index += 1
     if not all(parameter.grad is not None
                and bool(torch.isfinite(parameter.grad).all())
                for parameter in trainer.parameters.values()):

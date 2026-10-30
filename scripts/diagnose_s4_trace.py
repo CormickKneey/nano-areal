@@ -13,10 +13,12 @@ from safetensors.torch import load_file
 
 from nano_areal.archon import model as model_source
 from nano_areal.archon import qwen3vl as rope_source
+from nano_areal.archon import s4_metal as metal_source
 from nano_areal.archon import s4_operators as operator_source
 from nano_areal.archon.model import apply_rope
 from nano_areal.archon.qwen3vl import InterleavedMRoPE
-from nano_areal.archon.s4_operators import rounded_swiglu
+from nano_areal.archon.s4_metal import metal_rms
+from nano_areal.archon.s4_operators import device_rope_frequencies, rounded_swiglu
 from nano_areal.sync.policy import PolicyBinding, file_digest
 
 
@@ -33,10 +35,14 @@ def differences(current, expected):
 def rms_differences(hidden, weight, expected, epsilon):
     values = hidden.float()
     normalized = values * (values.square().mean(-1, keepdim=True) + epsilon).rsqrt()
-    return {
+    variants = {
         "native_rms": differences(normalized.bfloat16() * weight, expected),
         "single_round": differences((normalized * weight.float()).bfloat16(), expected),
     }
+    if hidden.device.type == "mps" and not hidden.requires_grad:
+        variants["metal_reduction"] = differences(
+            metal_rms(hidden, weight, epsilon), expected)
+    return variants
 
 
 def main():
@@ -75,6 +81,8 @@ def main():
                     norm_weights[name.removeprefix("language_model.model.")] = (
                         source.get_tensor(name).to(args.device))
     rope = InterleavedMRoPE(config).to(args.device)
+    device_rope = InterleavedMRoPE(config).to(args.device)
+    device_rope.inv_freq.copy_(device_rope_frequencies(config, args.device))
     rows = []
     with torch.no_grad():
         for turn, phase, start, end in contract["schedule"]:
@@ -82,6 +90,7 @@ def main():
             positions = torch.full((3, 1, 1), end - 1, device=args.device)
             cos, sin = rope(positions, torch.bfloat16)
             cos32, sin32 = rope(positions, torch.float32)
+            device_cos, device_sin = device_rope(positions, torch.bfloat16)
             hidden = tensors[f"{prefix}.embedding"].to(args.device).bfloat16()
             for index in range(config["num_hidden_layers"]):
                 stage = f"{prefix}.layers.{index}"
@@ -99,6 +108,7 @@ def main():
                     args.device).bfloat16().unsqueeze(1) for name in ("q", "k"))
                 variants = {
                     "native_rope": apply_rope(query, key, cos, sin),
+                    "device_init_rope": apply_rope(query, key, device_cos, device_sin),
                     "fp32_products": apply_rope(query.float(), key.float(), cos, sin),
                     "fp32_products_trig": apply_rope(
                         query.float(), key.float(), cos32, sin32),
@@ -146,6 +156,7 @@ def main():
               "source_sha256": {str(path): file_digest(path) for path in (
                   Path(__file__), Path(model_source.__file__),
                   Path(rope_source.__file__), Path(operator_source.__file__),
+                  Path(metal_source.__file__),
               )},
               "rows": rows}
     args.output.write_text(json.dumps(report, indent=2) + "\n")

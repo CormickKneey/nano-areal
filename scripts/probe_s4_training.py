@@ -122,6 +122,7 @@ def main():
     parser.add_argument("--group", type=Path)
     parser.add_argument("--policy-version", type=int, choices=(0, 1), default=0)
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
+    parser.add_argument("--aligned-arithmetic", action="store_true")
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
@@ -129,6 +130,8 @@ def main():
         parser.error("Prepare/update only accepts v0; update creates immutable v1")
     if args.phase != "prepare" and args.group is None:
         parser.error("Preflight/update requires a complete episode group")
+    if args.phase == "prepare" and args.aligned_arithmetic:
+        parser.error("Aligned arithmetic requires an existing bound policy and group")
     require_stopped_server()
     args.output.mkdir(parents=True, exist_ok=True)
     suffix = f"-v{args.policy_version}" if args.policy_version else ""
@@ -146,6 +149,7 @@ def main():
     }
     started = time.monotonic()
     trace = MemoryTrace() if args.phase == "update" else None
+    aligned_runtime = None
 
     def save():
         report["elapsed_seconds"] = time.monotonic() - started
@@ -206,6 +210,24 @@ def main():
             report.update(status="prepared", model=binding.model)
         else:
             restore(trainer, adapter)
+            if args.aligned_arithmetic:
+                from nano_areal.archon.s4_native import (
+                    AlignedS4Runtime,
+                    load_affine_projections,
+                )
+
+                aligned_runtime = AlignedS4Runtime(
+                    trainer, load_affine_projections(binding), episodes)
+                report["training_arithmetic"] = {
+                    **aligned_runtime.contract(), "policy_model": binding.model,
+                    "probe_source_sha256": file_digest(Path(__file__)),
+                    "policy_manifest_sha256": file_digest(manifest_path),
+                    "group_evidence_sha256": {
+                        str(item): file_digest(item) for item in (
+                            args.group / "report.json", *[
+                                args.group / f"episode-{index}.json"
+                                for index in range(len(episodes))])},
+                }
             report["group"] = str(args.group)
             report["turns"] = []
             rewards = []
@@ -216,6 +238,8 @@ def main():
                     if item["truncated"]:
                         raise ValueError("Truncated group cannot be used for training")
                     trajectory, captured = trajectory_from_turn(item)
+                    if aligned_runtime is not None:
+                        aligned_runtime.select_turn(len(report["turns"]))
                     with torch.no_grad():
                         current = trainer.response_logprobs(trajectory).cpu()[0]
                     old = captured[trajectory.response_mask]
@@ -308,12 +332,22 @@ def main():
                               model=updated.model, adapter_sha256_before=before,
                               adapter_sha256_after=after, adapter_roundtrip_exact=True)
             binding.verify_files()
+            if aligned_runtime is not None:
+                aligned_runtime.verify_sources()
+                if report["training_arithmetic"]["probe_source_sha256"] != file_digest(
+                        Path(__file__)):
+                    raise ValueError("Bound preflight/update source changed")
+                evidence = report["training_arithmetic"]["group_evidence_sha256"]
+                if evidence != {name: file_digest(Path(name)) for name in evidence}:
+                    raise ValueError("Bound group evidence changed during evaluation")
         report["memory_after"] = memory_snapshot(os.getpid())
         report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])
     except BaseException as error:
         report.update(status="error", error_type=type(error).__name__, error=str(error))
         raise
     finally:
+        if aligned_runtime is not None:
+            aligned_runtime.close()
         if trace and trace.thread.ident is not None:
             report["memory_trace"] = trace.finish()
             if "memory_after" in report:

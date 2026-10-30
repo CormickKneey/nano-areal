@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from nano_areal.archon import model as native_model
 
@@ -11,6 +12,8 @@ from nano_areal.archon import model as native_model
 def cached_text_logprobs(
     model, trajectory, before_segment=None, project_head=None, state=None,
     observe=None,
+    attention_kernel=None, activate_segment=None, checkpoint_layers=False,
+    score_response=True,
 ):
     if trajectory.pixel_values is not None:
         raise ValueError("Cached diagnostic supports text only")
@@ -44,36 +47,52 @@ def cached_text_logprobs(
             3, 1, -1)
         cos, sin = model.language_model.rope(position_ids, hidden.dtype)
         length = end - start
+        attention_mask = None
+        if start and length > 1:
+            attention_mask = (torch.arange(end, device=device)[None, :]
+                              <= torch.arange(start, end, device=device)[:, None])
         for index, layer in enumerate(model.language_model.layers):
-            attention = layer.attn
-            normalized = layer.input_layernorm(hidden)
-            query = attention.q_norm(attention.q_proj(normalized).view(
-                1, length, attention.n_heads, attention.head_dim))
-            key = attention.k_norm(attention.k_proj(normalized).view(
-                1, length, attention.n_kv_heads, attention.head_dim))
-            value = attention.v_proj(normalized).view(
-                1, length, attention.n_kv_heads, attention.head_dim)
-            query, key = native_model.apply_rope(query, key, cos, sin)
-            if observe is not None:
-                observe(f"layers.{index}.attn.rope_query", query)
-                observe(f"layers.{index}.attn.rope_key", key)
-            key, value = key.transpose(1, 2), value.transpose(1, 2)
-            if cache[index] is not None:
-                old_key, old_value = cache[index]
-                key = torch.cat((old_key, key), dim=-2)
-                value = torch.cat((old_value, value), dim=-2)
+            def forward_layer(hidden, old_key, old_value, layer=layer, index=index,
+                              start=start, end=end, length=length, cos=cos, sin=sin,
+                              attention_mask=attention_mask):
+                if activate_segment is not None:
+                    activate_segment(start, end, prompt)
+                attention = layer.attn
+                normalized = layer.input_layernorm(hidden)
+                query = attention.q_norm(attention.q_proj(normalized).view(
+                    1, length, attention.n_heads, attention.head_dim))
+                key = attention.k_norm(attention.k_proj(normalized).view(
+                    1, length, attention.n_kv_heads, attention.head_dim))
+                value = attention.v_proj(normalized).view(
+                    1, length, attention.n_kv_heads, attention.head_dim)
+                query, key = native_model.apply_rope(query, key, cos, sin)
+                if observe is not None:
+                    observe(f"layers.{index}.attn.rope_query", query)
+                    observe(f"layers.{index}.attn.rope_key", key)
+                key, value = key.transpose(1, 2), value.transpose(1, 2)
+                if old_key is not None:
+                    key = torch.cat((old_key, key), dim=-2)
+                    value = torch.cat((old_value, value), dim=-2)
+                kernel = attention_kernel or F.scaled_dot_product_attention
+                attended = kernel(
+                    query.transpose(1, 2),
+                    key.repeat_interleave(attention.n_rep, dim=1),
+                    value.repeat_interleave(attention.n_rep, dim=1),
+                    attn_mask=attention_mask, is_causal=start == 0,
+                ).transpose(1, 2).contiguous().view(1, length, -1)
+                hidden = hidden + attention.o_proj(attended)
+                hidden = hidden + layer.mlp(layer.post_attention_layernorm(hidden))
+                return hidden, key, value
+
+            old_key, old_value = cache[index] if cache[index] else (None, None)
+            if checkpoint_layers and model.training and torch.is_grad_enabled():
+                hidden, key, value = checkpoint(
+                    forward_layer, hidden, old_key, old_value, use_reentrant=False)
+            else:
+                hidden, key, value = forward_layer(hidden, old_key, old_value)
             cache[index] = key, value
-            attention_mask = None
-            if start and length > 1:
-                attention_mask = (torch.arange(end, device=device)[None, :]
-                                  <= torch.arange(start, end, device=device)[:, None])
-            attended = F.scaled_dot_product_attention(
-                query.transpose(1, 2), key.repeat_interleave(attention.n_rep, dim=1),
-                value.repeat_interleave(attention.n_rep, dim=1),
-                attn_mask=attention_mask, is_causal=start == 0,
-            ).transpose(1, 2).contiguous().view(1, length, -1)
-            hidden = hidden + attention.o_proj(attended)
-            hidden = hidden + layer.mlp(layer.post_attention_layernorm(hidden))
+        if not score_response:
+            continue
         hidden = model.language_model.norm(hidden[:, -1:])
         if project_head is None:
             weight = (model.language_model.embed_tokens.weight if model.tied
@@ -86,4 +105,4 @@ def cached_text_logprobs(
     if state is not None:
         state.update(cache=cache, input_ids=trajectory.input_ids[:-1].tolist(),
                      reused_tokens=reused)
-    return torch.cat(scores, dim=-1)
+    return torch.cat(scores, dim=-1) if score_response else None

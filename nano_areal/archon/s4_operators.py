@@ -6,6 +6,49 @@ import torch
 from torch.nn import functional as F
 
 
+def device_rope_frequencies(config, device):
+    head_dim = config["head_dim"]
+    rope = config.get("rope_parameters", config.get("rope_scaling", {}))
+    if rope.get("rope_type", "default") != "default":
+        raise ValueError("Only default rotary frequencies are supported")
+    theta = rope.get("rope_theta", config.get("rope_theta", 5000000))
+    return 1 / theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim)
+
+
+def splitkv_attention(query, key, value, query_offset, partition_size=512):
+    if (query.ndim != 4 or key.ndim != 4 or value.shape != key.shape
+            or query.shape[:2] != key.shape[:2] or query.shape[-1] != key.shape[-1]
+            or query.dtype != torch.bfloat16 or key.dtype != query.dtype
+            or value.dtype != query.dtype or partition_size != 512
+            or query_offset < 0 or query_offset + query.shape[-2] > key.shape[-2]):
+        raise ValueError("Split-KV requires compatible bf16 causal attention tensors")
+    query_positions = torch.arange(query_offset, query_offset + query.shape[-2],
+                                   device=query.device)[:, None]
+    partials, maxima, sums = [], [], []
+    for start in range(0, key.shape[-2], partition_size):
+        end = min(start + partition_size, key.shape[-2])
+        scores = query.float() @ key[..., start:end, :].float().transpose(-2, -1)
+        scores = (scores * query.shape[-1] ** -0.5) * 1.4426950408889634
+        allowed = torch.arange(start, end, device=query.device)[None] <= query_positions
+        scores = scores.masked_fill(~allowed, -torch.inf)
+        maximum = scores.amax(-1, keepdim=True)
+        safe_maximum = torch.where(torch.isfinite(maximum), maximum, 0)
+        weights = torch.exp2(scores - safe_maximum)
+        denominator = weights.sum(-1, keepdim=True)
+        partial = weights @ value[..., start:end, :].float()
+        partials.append((partial / (denominator + 1e-6)).bfloat16().float())
+        maxima.append(maximum)
+        sums.append(denominator)
+    global_maximum = torch.stack(maxima).amax(0)
+    rescaled = [total * torch.exp2(maximum - global_maximum)
+                for total, maximum in zip(sums, maxima)]
+    inverse = 1 / (sum(rescaled) + 1e-6)
+    output = partials[0] * rescaled[0] * inverse
+    for partial, total in zip(partials[1:], rescaled[1:]):
+        output = output + partial * total * inverse
+    return output.to(query.dtype)
+
+
 def affine_weights(packed, scales, biases):
     if packed.ndim != 2 or scales.ndim != 2 or scales.shape != biases.shape:
         raise ValueError("Expected matrix affine quantization tensors")
@@ -22,6 +65,14 @@ def affine_decode(hidden, packed, scales, biases):
     if hidden.dtype != torch.bfloat16 or hidden.shape[-1] != packed.shape[-1] * 8:
         raise ValueError("Expected bf16 inputs matching the packed affine weight")
     weights = affine_weights(packed, scales, biases)
+    return affine_decode_weights(hidden, weights, biases)
+
+
+def affine_decode_weights(hidden, weights, biases):
+    if (hidden.dtype != torch.bfloat16 or weights.dtype != torch.float32
+            or hidden.shape[-1] != weights.shape[-1]
+            or biases.shape != (weights.shape[0], weights.shape[1] // 64)):
+        raise ValueError("Expected bf16 inputs and matching fp32 affine weights")
     grouped = hidden.reshape(*hidden.shape[:-1], -1, 16, 4)
     rounded = ((grouped[..., 0] + grouped[..., 1]) + grouped[..., 2]) + grouped[..., 3]
     correction = (rounded.float() - grouped.float().sum(-1)).sum(-1)

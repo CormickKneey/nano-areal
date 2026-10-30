@@ -131,6 +131,9 @@ async def probe(args):
         "attempted": 0,
         "episodes": [],
         "temperature": args.temperature,
+        "max_output_tokens": args.max_output_tokens,
+        "timeout_seconds": args.timeout,
+        "sampling_seed": None,
     }
     if manifest:
         report["scope"] = "HumanEval-derived nano-swe foundation, one task group"
@@ -152,7 +155,7 @@ async def probe(args):
             )
             agent = DshAgent(
                 model_name=args.model,
-                max_output_tokens=512,
+                max_output_tokens=args.max_output_tokens,
                 timeout_seconds=args.timeout,
                 patches=(str(Path("scripts/dsh_patch.yml").resolve()),),
                 session_log_dir=str(args.output / "sessions"),
@@ -334,4 +337,6 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, choices=range(1, 9), default=2)
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--temperature", type=float, default=0)
+    parser.add_argument(
+        "--max-output-tokens", type=int, choices=(512, 1024), default=512)
     raise SystemExit(asyncio.run(probe(parser.parse_args())))
