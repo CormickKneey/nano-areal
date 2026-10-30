@@ -4,114 +4,112 @@ Branch: cursor/macos-qwen3vl-v02-plan-f4cf
 PR: #4 OPEN; same branch; no merge or force-push.
 
 Stage:
-- S1/S2 remain accepted, unchanged in scope.
-- S3 measured gates PASS: original BFCL two-turn fixture 2/2, repeated twice
-  on production hermes; previous CLEVR-count MPS loss-drop remains valid.
-- S4 bounded coding/session/hidden-check gates PASS for two fixed groups.
-  Full S4 training remains unaccepted; no GRPO or adapter update was started.
+- S1 production HTTP and S2 native archon parity remain accepted.
+- S3 remains accepted: unchanged BFCL fixture 2/2 twice under production
+  hermes; previous CLEVR-count MPS loss-drop remains valid.
+- S4 bounded coding/session/hidden-check gates remain accepted.
+- Static initial PEFT policy identity/provenance is measured on production.
+- Full S4 training is BLOCKED: bf16/4-bit behavior drift and homogeneous
+  successful groups prevent an honest nonzero GRPO update.
+- No optimizer step, trained adapter export or v0-to-v1 feedback occurred.
+  No multi-hour GRPO. Earlier digit-bandit training is not this coding gate.
 
-Milestone commits:
-- d03a3ea fix(s3): execute implicit directory tool requests
-- 8688424 fix(s4): enable file tools and own cancellation
-- The following docs commit refreshes this handoff; use git log -3 --oneline.
-Both implementation milestones were pushed to the same PR branch.
+Commits:
+- d03a3ea: accepted generic S3 execution/default-directory tool policy.
+- 8688424 / 52d40ff: accepted bounded coding groups, owned cancellation.
+- 468cdef feat(s4): bind metal policy and audit training gates
+  Pushed to the same PR branch. Native PEFT export, SHA-256 policy manifest,
+  immutable model/version response checks, session binding, policy fields
+  through proxy JSON/client export, complete-group native preflight.
+- The docs commit containing this handoff records measured blocked gates;
+  identify its hash with git log -2 --oneline.
 
-S3:
-- Generic system prompt now executes actionable requests, defines omitted
-  filesystem paths as '.', and reuses prior arguments for repeat requests.
-  No fixture-specific strings, tool names or ground truth enter that prompt.
-- User turns remain exactly List files / Again, schema and rewards unchanged,
-  tool_choice=auto, temperature=0, top_p=0.95, max_tokens=128.
-- Production --enable-auto-tool-choice --tool-call-parser hermes emits real
-  ls(path='.') calls on both turns. Explicit-path diagnostics remain separate.
-- First weaker default-directory attempt was only 1/2; retained evidence:
-  artifacts/s3/bfcl-cwd-hermes.json.
-- Passing evidence: artifacts/s3/bfcl-action-hermes.json and
-  artifacts/s3/bfcl-action-hermes-replay.json (includes actual requests).
+Evidence under artifacts/s4 (ignored, retained locally):
+- policy-sync/prepare.json: rank-8 native q/v PEFT initialization, 2,949,120
+  trainable parameters, 9.19 seconds. Production activates 72 modules.
+  Initial B tensors are zero: loading v0 is NOT a nonzero adapter update.
+- policy-sync-53/report.json: HumanEval/53 2/2, model turns 4/4, tools 3/3.
+- policy-sync-0/report.json: HumanEval/0 2/2, model turns 4/4, tools 3/3.
+- Both strictly reconcile dsh/proxy/backend/export, pass official external
+  pytest test files 2/2 each, and have zero backend-only completions.
+- policy-sync/preflight.json: 8 turns / 390 response tokens, MAE 0.10771345,
+  maximum token error 4.96346903, declared MAE threshold 0.01; 42.01 seconds,
+  exit 2. Captured behavior probabilities are not replaced by recomputation.
+- policy-final/prepare.json: final-code PEFT exact roundtrip, 6.55 seconds,
+  model s4-policy-v0-3eb0f9fb840aa4bf. The earlier snapshot has model
+  s4-policy-v0-6f0c78fbb794650a; different paths/metadata, same seeded adapter
+  tensor file. Independent v0 snapshots are not a trained version transition.
+- policy-final-53/report.json: final-code replay 2/2, model turns 4/4,
+  tools 3/3, official pytest files 2/2, exact usage/tool/attempt accounting.
+- policy-final/preflight.json: 8 turns / 396 response tokens, MAE 0.10248081,
+  maximum token error 5.21190739, threshold unchanged at 0.01; 41.85 seconds,
+  exit 2. Actual episode rewards [1, 1], group advantages [0, 0], updates 0.
+  Do not manufacture spread from proxy turn-discounted rewards.
 
-S4 root fixes:
-- Loader ignored select patches. scripts/dsh_patch.yml now uses id and
-  restates whole replacement configs, enabling configured read/write/edit.
-- Generic prompt reads README, writes solution.py through structured file
-  tools, then runs a local Python check. No canonical solution or official
-  hidden checks are supplied to the agent. Host withholding is not a sandbox.
-- Each proxy session owns pending requests and a durable-in-report ledger.
-  Session end marks inactive, cancels/joins its requests, then permits export.
-  Failed/cancelled episodes discard training export, not backend evidence.
-- Python cancellation closes/joins the owned SDK runtime and persists status.
-  Embedded Uvicorn no longer intercepts process SIGINT from asyncio's owner.
-- Backend-only responses remain explicit failures; nothing is trimmed to
-  force dsh/proxy agreement. Cancelled requests with no response have unknown
-  usage, not a fabricated zero. Delivered-message token/tool checks stay strict.
-- Probe writes started episodes before running them and distinguishes planned
-  from actually started attempts, including Ctrl-C. No next-episode leakage.
+Memory boundaries:
+- Serving and native training loaded sequentially, never co-resident.
+- Native after-forward snapshots: MPS allocated 8,954,668,288 bytes, driver
+  9,884,614,656 bytes. Not activation peaks or backward qualification.
+- Initial preflight sequence lengths 1179-1642, not an 8192-token test.
+- Final preflight system swap 3790.88 -> 3782.88 MiB (preexisting swap).
+- Initial Metal KV layout 18.91 GiB despite the 1.25 GiB CLI KV flag.
+  Final replay also sets --gpu-memory-utilization 0.35: actual layout
+  4.69 GiB / 2133 blocks. Do not assume --kv-cache-memory-bytes alone
+  bounds the installed Metal planner. S1 defaults/package code unchanged.
+- Backward/optimizer/export memory and pressure-free residency unqualified.
 
-Measured final fixed configuration:
-  temperature=0, output budget=512, activity deadline=120 seconds, 2 fresh
-  episodes per task, same generic instruction for HumanEval/53 and HumanEval/0.
-- artifacts/s4/accepted-53/report.json: 2/2, model turns 4/4, tool turns 3/3,
-  official external pytest test-file checks 2/2; exact usage and export counts.
-- artifacts/s4/accepted-0/report.json: 2/2, model turns 5/4, tool turns 4/3,
-  official external pytest test-file checks 2/2; exact usage and export counts.
-- Both final groups: zero failed requests or completed backend-only responses.
-- Deliberate timeout: artifacts/s4/cancel-final-53/report.json, 0/1, one owned
-  cancelled backend request, no backend-only completion. Remains a failure.
-- Real corrected Ctrl-C: artifacts/s4/interrupted-fixed-0/report.json, 0/1
-  started (2 planned), exit 130, runtime reaped, one cancelled backend request,
-  zero backend-only completions. Unreplayed final tool result correctly fails
-  strict reconciliation; no successful training export is claimed.
-- Earlier Ctrl-C diagnostic exposed the Uvicorn signal bug: first episode
-  passed, second failed with one retained backend-only completion. Evidence:
-  artifacts/s4/interrupted-owned-0 (two rows, no final summary). Not discarded.
+All-start denominator:
+- Prior 11/25 and all 14 failures/cancellations retained.
+- This continuation adds 6/6 official-task starts: cumulative 17/31.
+- Repeated selected task groups are engineering probes, NOT HumanEval
+  benchmark accuracy or pass@k. Full table: docs/s4-foundations.md.
 
-ALL official-task exploration starts: 11/25 pass, 14 failures retained.
-Previous handoff 0/8 plus this continuation 11/17. Includes failed config
-attempts, deliberate timeouts, interrupted sessions and the historical orphan
-home without a finished report row. Final fixed groups alone are 4/4; this is
-NOT a representative HumanEval score. Full per-run table: docs/s4-foundations.md.
-
-Reproduce (all caches/temporary workspaces stay repository-local):
+Reproduce with fresh output directories and repository-local caches:
   export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
   export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
   export XDG_CACHE_HOME="$PWD/.s1-cache/xdg"
-  mkdir -p "$TMPDIR" artifacts/s3 artifacts/s4
+  export POLICY_OUT=artifacts/s4/policy-reproduce
+  export GROUP_OUT=artifacts/s4/policy-reproduce-53
+  mkdir -p "$TMPDIR"
+  PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py prepare \
+    --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct --output "$POLICY_OUT"
+  MODEL=$(.venv/bin/python -c \
+    'import json,os; print(json.load(open(os.environ["POLICY_OUT"]+"/policy-v0.json"))["model"])')
 
-  # Only start production when probing, and stop this owned server afterward:
-  .s1-cache/venv-metal/bin/vllm serve \
-    "$PWD/.s1-cache/models/Qwen3-VL-4B-Instruct-4bit" \
-    --served-model-name mlx-community/Qwen3-VL-4B-Instruct-4bit \
-    --host 127.0.0.1 --port 8000 --max-model-len 8192 --max-num-seqs 1 \
-    --kv-cache-memory-bytes 1342177280 --enable-auto-tool-choice \
-    --tool-call-parser hermes
-
-  # In a second terminal with the same environment:
-  PYTHONPATH=. .venv/bin/python scripts/probe_bfcl_tools.py --parser hermes \
-    --output artifacts/s3/bfcl-reproduce.json
-  .venv/bin/python scripts/build_nano_swe.py \
-    --data-path .s1-cache/datasets/human-eval/HumanEval.jsonl.gz \
-    --task-id HumanEval/53
+  # Start the owned production server with the complete launch command in
+  # docs/s4-training.md, using this MODEL and POLICY_OUT; LoRA flags required.
+  # Do not enable runtime/in-place adapter mutation; use static snapshots.
   PYTHONPATH=. .venv/bin/python scripts/probe_s4.py \
     --task-manifest .s1-cache/nano-swe/human-eval-53/manifest.json \
-    --episodes 2 --timeout 120 --temperature 0 \
-    --output artifacts/s4/reproduce-53
-  # Repeat builder/probe with HumanEval/0 and human-eval-0 for the second group.
-  # Use a new output directory per run; retain all failed starts.
+    --model "$MODEL" --policy-manifest "$POLICY_OUT/policy-v0.json" \
+    --episodes 2 --timeout 120 --temperature 0 --output "$GROUP_OUT"
+  # Stop that owned server before loading native training weights.
+  PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py preflight \
+    --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct \
+    --output "$POLICY_OUT" --group "$GROUP_OUT"
+  # Expected exit 2 with retained blocked report, not a training success.
 
 Validation:
   PYTHONPATH=. .venv/bin/python -m pytest -q
-  # 79 pass; final cancellation-specific tests also replayed independently.
-  .venv/bin/ruff check nano_areal/agent/dsh.py nano_areal/agent/dsh_audit.py \
-    nano_areal/reward/dsh_task.py scripts/probe_s4.py scripts/test_s4.py \
-    scripts/build_nano_swe.py scripts/probe_bfcl_tools.py
-  # Targeted Ruff and git diff --check pass. Existing unrelated proxy.py
-  # line-length violations are not reformatted by this change.
+  # 86 passed. Targeted Ruff and git diff --check pass.
+  .venv/bin/ruff check nano_areal/sync/policy.py \
+    nano_areal/archon/qwen3vl_lora.py nano_areal/engine/types.py \
+    scripts/probe_s4.py scripts/probe_s4_training.py scripts/test_policy_sync.py
+  # Existing unrelated proxy.py line-length violations remain untouched.
 
-Remaining boundaries:
-- No multi-hour GRPO. Full S4 still needs production adapter/version sync,
-  complete-group rollout/update/export, policy provenance and memory validation.
-- Existing quantized/bf16 logprob drift and unqualified long-context/co-resident
-  training limits remain. No broad BFCL or HumanEval accuracy claim.
-- Completed backend-only responses must keep failing strict delivery checks.
-- Owned production server is stopped. No OrbStack/remount/sudo/password actions.
-- User-owned untracked prompt/log files remain untouched; no weights, caches,
-  raw sessions, task solutions or hidden tests are committed.
+Remaining gates in order:
+1. Align effective train/served base weights; measure numerical behavior
+   parity without loosening the bound. Static identity is not nonzero sync.
+2. Keep all-success groups zero-advantage; obtain genuinely informative
+   complete groups with declared sampling and unchanged external rewards.
+3. Only then run 1-3 bounded optimizer steps, export a changed adapter,
+   restart production on its immutable version, reconcile fresh episodes,
+   and measure backward/optimizer/export memory. No multi-hour GRPO.
+4. Do not claim full S4 until update/export/feedback/memory gates pass.
+
+Owned API/engine processes stopped. No OrbStack quit, remount, sudo,
+passwords, merge, force-push or user-owned prompt/log changes. No weights,
+hidden tests, task solutions or raw sessions committed. Details and exact
+production launch: docs/s4-training.md. All earlier evidence retained.

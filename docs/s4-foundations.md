@@ -9,6 +9,11 @@ external checks, real multi-turn tools, durable logs and exact accounting.
 No GRPO, adapter update, or training run was started. This accepts the bounded
 coding/session/hidden-check gate, not full S4 training or benchmark accuracy.
 
+The subsequent [production training preflight](s4-training.md) pins native PEFT
+exports to served model identities and passes six more coding episodes.
+Numerical bf16/4-bit policy drift and zero within-group advantages block an
+optimizer update. Full S4 training remains unaccepted.
+
 ### File tools and cancellation correction
 
 The prior patch used `select`, which this Loader silently skipped. Patches
@@ -74,7 +79,10 @@ Failures are not removed from the overall engineering denominator:
 | cancel-final-53 | 1 | 0 | Deliberate deadline; classified, reaped and retained |
 | accepted-53 | 2 | 2 | Final fixed group |
 | accepted-0 | 2 | 2 | Final fixed group |
-| **All started official-task episodes** | **25** | **11** | **14 failures retained** |
+| policy-sync-53 | 2 | 2 | Versioned PEFT production replay |
+| policy-sync-0 | 2 | 2 | Versioned PEFT production replay |
+| policy-final-53 | 2 | 2 | Final provenance and reduced-cache replay |
+| **All started official-task episodes** | **31** | **17** | **14 failures retained** |
 
 The new run contributes 11/17; the previous handoff contributes 0/8. The
 earlier deterministic report has only one finished row, but two retained
@@ -83,9 +91,11 @@ The first SIGINT diagnostic has two recorded rows but no final summary;
 its second row still counts as a failure. The corrected SIGINT run planned
 two episodes but started only one; its unstarted second episode is not a
 failure or a pass. Mixed prompts/configurations, repeated tasks and deliberate
-cancellation tests make 11/25 an exploration ledger, not HumanEval accuracy.
+cancellation tests make the earlier 11/25 an exploration ledger, not HumanEval
+accuracy. The training-preflight continuation adds 6/6 for a cumulative 17/31.
 
-Validation: **79 regression tests pass**, including asynchronous SDK
+Validation at the coding milestone: **79 regression tests pass** (the later
+policy-preflight milestone has **86**), including asynchronous SDK
 cancellation, per-session request isolation, active-session export rejection,
 failed-episode discard without evidence deletion, embedded signal ownership,
 and existing S1/S2/S3 contracts. The targeted Ruff command below passes;
