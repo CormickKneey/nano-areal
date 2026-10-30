@@ -10,6 +10,7 @@ from nano_areal.archon import model as native_model
 
 def cached_text_logprobs(
     model, trajectory, before_segment=None, project_head=None, state=None,
+    observe=None,
 ):
     if trajectory.pixel_values is not None:
         raise ValueError("Cached diagnostic supports text only")
@@ -53,6 +54,9 @@ def cached_text_logprobs(
             value = attention.v_proj(normalized).view(
                 1, length, attention.n_kv_heads, attention.head_dim)
             query, key = native_model.apply_rope(query, key, cos, sin)
+            if observe is not None:
+                observe(f"layers.{index}.attn.rope_query", query)
+                observe(f"layers.{index}.attn.rope_key", key)
             key, value = key.transpose(1, 2), value.transpose(1, 2)
             if cache[index] is not None:
                 old_key, old_value = cache[index]

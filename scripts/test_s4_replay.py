@@ -125,3 +125,18 @@ def test_native_diagnostic_rejects_unbounded_deadlines(monkeypatch, tmp_path, se
         main()
     assert error.value.code == 2
     assert not (tmp_path / "new.json").exists()
+
+
+@pytest.mark.parametrize("seconds", ["0", "601", "nan", "inf"])
+def test_mlx_replay_rejects_unbounded_deadlines(monkeypatch, tmp_path, seconds):
+    from diagnose_s4_replay import main
+
+    monkeypatch.setattr(sys, "argv", [
+        "diagnose_s4_replay.py", "--policy", "missing-policy.json",
+        "--group", "missing-group", "--output", str(tmp_path / "new.json"),
+        "--execution", "paged", "--max-seconds", seconds,
+    ])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert not (tmp_path / "new.json").exists()

@@ -13,10 +13,12 @@ from probe_s4_training import complete_group, require_stopped_server, restore
 from safetensors import safe_open
 
 from nano_areal.archon import model as native_model
+from nano_areal.archon import s4_trace as trace_source
 from nano_areal.archon.model import RMSNorm
 from nano_areal.archon.qwen3vl_lora import NativeQwen3VLLoRATrainer
-from nano_areal.archon.s4_operators import affine_decode
+from nano_areal.archon.s4_operators import affine_decode, rounded_swiglu, splitk_prefill
 from nano_areal.archon.s4_replay import cached_text_logprobs
+from nano_areal.archon.s4_trace import LayerTrace, native_trace_hooks
 from nano_areal.archon.s4_update import trajectory_from_turn
 from nano_areal.archon.state_dict import qwen3vl_hf_key
 from nano_areal.sync.policy import PolicyBinding, file_digest
@@ -29,21 +31,35 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fused-rms", action="store_true")
     parser.add_argument("--dense-projections", action="store_true")
+    parser.add_argument("--splitk-prefill", action="store_true")
     parser.add_argument("--fp32-rope", action="store_true")
     parser.add_argument("--fused-swiglu", action="store_true")
+    parser.add_argument("--rounded-swiglu", action="store_true")
     parser.add_argument("--dense-head", action="store_true")
     parser.add_argument("--prefill-head", action="store_true")
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--cached-execution", action="store_true")
     parser.add_argument("--prefix-reuse", action="store_true")
     parser.add_argument("--max-seconds", type=float, default=600)
+    parser.add_argument("--trace-output", type=Path)
+    parser.add_argument("--trace-reference", type=Path)
     args = parser.parse_args()
     if args.prefix_reuse and not args.cached_execution:
         parser.error("Prefix reuse requires cached execution")
+    if args.splitk_prefill and not args.cached_execution:
+        parser.error("Split-K prefill requires cached execution")
+    if args.rounded_swiglu and args.fused_swiglu:
+        parser.error("Choose exactly one SwiGLU diagnostic")
     if not 0 < args.max_seconds <= 600:
         parser.error("Diagnostic deadline must be in (0, 600] seconds")
     if args.output.exists():
         parser.error("Diagnostic evidence must not be overwritten")
+    if (args.trace_output or args.trace_reference) and not args.cached_execution:
+        parser.error("Tracing requires cached execution")
+    if args.trace_output and args.trace_output.exists():
+        parser.error("Trace evidence must not be overwritten")
+    trace_reference_hash = (file_digest(args.trace_reference)
+                            if args.trace_reference else None)
     require_stopped_server()
     binding = PolicyBinding.read(args.policy)
     binding.verify_files()
@@ -101,6 +117,10 @@ def main():
             hidden = inputs[0]
             start = context["decode_start"]
             if start >= hidden.shape[-2]:
+                if args.splitk_prefill and hidden.shape[-2] >= 16:
+                    return splitk_prefill(hidden, module.weight)
+                return output
+            if args.dense_projections:
                 return output
             tensors = quantized_on_device(name, hidden.device)
             replacement = affine_decode(hidden[..., start:, :], *tensors)
@@ -115,7 +135,7 @@ def main():
     for name, module in trainer.model.named_modules():
         mapped = name.removesuffix(".base")
         if (isinstance(module, torch.nn.Linear) and mapped in quantized
-                and not args.dense_projections):
+                and (not args.dense_projections or args.splitk_prefill)):
             handles.append(module.register_forward_hook(projection(mapped)))
         if args.fused_rms and isinstance(module, RMSNorm):
             handles.append(module.register_forward_hook(fused_rms))
@@ -131,11 +151,13 @@ def main():
     def fused_activation(state):
         def hook(module, inputs):
             gate, up = state.pop("gate"), state.pop("up")
+            if args.rounded_swiglu:
+                return (rounded_swiglu(gate, up),)
             hidden = torch.nn.functional.silu(gate.float()) * up.float()
             return (hidden.to(gate.dtype),)
         return hook
 
-    if args.fused_swiglu:
+    if args.fused_swiglu or args.rounded_swiglu:
         for layer in trainer.model.language_model.layers:
             state = {}
             for name in ("gate", "up"):
@@ -153,6 +175,10 @@ def main():
         args.group / f"episode-{index}.json" for index in range(len(episodes))
     ]]
     evidence_hashes = {str(path): file_digest(path) for path in evidence}
+    trace = (LayerTrace(evidence_hashes)
+             if (args.trace_output or args.trace_reference) else None)
+    if trace is not None:
+        handles.extend(native_trace_hooks(trainer.model.language_model, trace))
     report = {"scope": "Unbound counterfactual; not policy acceptance or an update",
               "status": "running", "evidence_sha256": evidence_hashes,
               "source_sha256": {
@@ -160,6 +186,7 @@ def main():
                       Path(__file__), Path(native_model.__file__).with_name(
                           "s4_operators.py"
                       ), Path(native_model.__file__).with_name("s4_replay.py"),
+                      Path(trace_source.__file__),
                   )
               },
               "planned_turns": sum(len(item["turns"]) for item in episodes),
@@ -167,8 +194,10 @@ def main():
               "operator": "fp32 affine weights plus bf16 four-value bias sum rounding",
               "fused_rms": args.fused_rms,
               "dense_projections": args.dense_projections,
+              "splitk_prefill": args.splitk_prefill,
               "fp32_rope": args.fp32_rope,
               "fused_swiglu": args.fused_swiglu,
+              "rounded_swiglu": args.rounded_swiglu,
               "dense_head": args.dense_head,
               "prefill_head": args.prefill_head,
               "fp32_attention": args.fp32_attention,
@@ -193,6 +222,8 @@ def main():
                         prompt = int(positions[0]) + 1
 
                         def before_segment(start, end):
+                            if trace is not None:
+                                trace.segment(len(report["turns"]), start, end, prompt)
                             if time.monotonic() - started >= args.max_seconds:
                                 raise TimeoutError(
                                     "Diagnostic exceeded its forward deadline")
@@ -210,6 +241,7 @@ def main():
                         candidate = cached_text_logprobs(
                             trainer.model, trajectory, before_segment, project_head,
                             state=cache_state,
+                            observe=trace.capture if trace is not None else None,
                         ).cpu()[0]
                     else:
                         dense = trainer.response_logprobs(trajectory).cpu()[0]
@@ -246,6 +278,15 @@ def main():
         binding.verify_files()
         if evidence_hashes != {str(path): file_digest(path) for path in evidence}:
             raise ValueError("Captured evidence changed during the diagnostic")
+        if trace is not None:
+            if args.trace_output:
+                trace.save(args.trace_output)
+                report["trace_sha256"] = file_digest(args.trace_output)
+            if args.trace_reference:
+                if file_digest(args.trace_reference) != trace_reference_hash:
+                    raise ValueError("Trace reference changed during the diagnostic")
+                report["layerwise"] = trace.compare(args.trace_reference)
+                report["trace_reference_sha256"] = trace_reference_hash
         report["status"] = "diagnostic-complete"
         report["max_logprob_mae"] = 0.01
         report["within_bound"] = report["mae"] <= 0.01
@@ -260,7 +301,8 @@ def main():
         torch.nn.functional.scaled_dot_product_attention = original_attention
         for handle in handles:
             handle.remove()
-    print(json.dumps({key: value for key, value in report.items() if key != "turns"}))
+    print(json.dumps({key: value for key, value in report.items()
+                      if key not in ("turns", "layerwise")}))
 
 
 if __name__ == "__main__":

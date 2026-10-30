@@ -2,6 +2,17 @@
 
 ## Status: bounded coding gate passes; training remains unaccepted
 
+Continue7 adds observational paged/prefix layer traces and shared-input
+operator isolation. Short-prefill Split-K and bf16 sigmoid rounding are now
+independently reproduced; native RMSNorm should not be replaced with a
+single-rounding variant. Neither correction closes the unchanged **0.01**
+whole-group logprob gate: cached Split-K + rounded sigmoid is **0.01063418**,
+full-forward rounded sigmoid **0.01061234**. These are unbound diagnostics,
+not native policy acceptance. The bound sampled /0 remains **0.01112227**.
+See [continue7 evidence](s4-training.md). No new sampling, updates or backward
+memory qualification; declared **24/49**, **25 failures retained**, updates **0**.
+Current regression coverage is **136 passing tests**; no training gate is inferred.
+
 Continue5 isolates MLX single-token affine bias-sum rounding: a diagnostic
 reference exactly matches two isolated actual-checkpoint projections, but
 whole sampled /0 still fails (head-isolation MAE **0.01090651**, bound **0.01**).

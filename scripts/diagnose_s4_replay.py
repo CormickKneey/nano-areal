@@ -12,6 +12,8 @@ import torch
 from probe_s4_training import complete_group, require_stopped_server
 from safetensors.torch import load_file
 
+from nano_areal.archon import s4_trace as trace_source
+from nano_areal.archon.s4_trace import LayerTrace, mlx_trace_hooks
 from nano_areal.archon.s4_update import trajectory_from_turn
 from nano_areal.sync.policy import PolicyBinding, file_digest
 
@@ -54,9 +56,15 @@ def main():
     )
     parser.add_argument("--prefix-reuse", action="store_true")
     parser.add_argument("--block-size", type=int, default=16)
+    parser.add_argument("--trace-output", type=Path)
+    parser.add_argument("--max-seconds", type=float, default=600)
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Diagnostic evidence must not be overwritten")
+    if not 0 < args.max_seconds <= 600:
+        parser.error("Diagnostic deadline must be in (0, 600] seconds")
+    if args.trace_output and (args.trace_output.exists() or args.execution != "paged"):
+        parser.error("Tracing requires paged execution and a new trace output")
     if args.block_size < 16 or args.block_size % 16:
         parser.error("Paged block size must be a positive multiple of 16")
     if args.prefix_reuse and args.execution != "paged":
@@ -78,7 +86,8 @@ def main():
         "status": "running", "execution": args.execution,
         "prefix_reuse": args.prefix_reuse, "block_size": args.block_size,
         "policy": binding.model, "updates": 0, "evidence_sha256": hashes,
-        "source_sha256": {str(Path(__file__)): file_digest(Path(__file__))},
+        "source_sha256": {str(path): file_digest(path) for path in
+                          (Path(__file__), Path(trace_source.__file__))},
         "planned_turns": sum(len(episode["turns"]) for episode in episodes),
         "turns": [], "max_logprob_mae": 0.01,
     }
@@ -89,6 +98,7 @@ def main():
 
     save()
     started = time.monotonic()
+    restore_trace = None
     try:
         import mlx.core as mx
         import mlx_vlm.models.qwen3_vl.language as language_source
@@ -107,6 +117,11 @@ def main():
                               for name in ("mlx", "mlx-vlm", "vllm-metal")}
         report["source_sha256"][language_source.__file__] = file_digest(
             Path(language_source.__file__))
+        kernel_root = Path(mx.__file__).parent / "include/mlx/backend/metal/kernels"
+        for name in ("quantized.h", "unary_ops.h", "reduction/reduce_col.h",
+                     "reduction/ops.h"):
+            source = kernel_root / name
+            report["source_sha256"][str(source)] = file_digest(source)
         paged = None
         if args.execution == "paged":
             from vllm_metal.attention import context
@@ -134,6 +149,9 @@ def main():
                 for source in sorted(metal_root.glob(pattern)):
                     report["source_sha256"][str(source)] = file_digest(source)
 
+        trace = LayerTrace(hashes) if args.trace_output else None
+        if trace is not None:
+            restore_trace = mlx_trace_hooks(model.model, trace)
         previous = []
         for episode_index, episode in enumerate(episodes):
             for turn_index, item in enumerate(episode["turns"]):
@@ -149,6 +167,10 @@ def main():
                                        for index in range(prompt, len(ids) - 1)]
                 ]
                 for start, end in segments:
+                    if time.monotonic() - started >= args.max_seconds:
+                        raise TimeoutError("Replay exceeded its forward deadline")
+                    if trace is not None:
+                        trace.segment(len(report["turns"]), start, end, prompt)
                     inputs = mx.array([ids[start:end]], dtype=mx.int32)
                     positions = mx.broadcast_to(mx.arange(start, end)[None, None, :],
                                                 (3, 1, end - start))
@@ -203,12 +225,19 @@ def main():
         binding.verify_files()
         if hashes != {str(path): file_digest(path) for path in evidence}:
             raise ValueError("Captured evidence changed during replay")
+        if trace is not None:
+            trace.save(args.trace_output)
+            report["trace_sha256"] = file_digest(args.trace_output)
         report.update(status="diagnostic-complete", within_bound=report["mae"] <= 0.01)
         save()
     except BaseException as error:
-        report.update(status="error", error_type=type(error).__name__, error=str(error))
+        report.update(status="error", error_type=type(error).__name__, error=str(error),
+                      elapsed_seconds=time.monotonic() - started)
         save()
         raise
+    finally:
+        if restore_trace is not None:
+            restore_trace()
     print(json.dumps({key: value for key, value in report.items() if key != "turns"}))
 
 
