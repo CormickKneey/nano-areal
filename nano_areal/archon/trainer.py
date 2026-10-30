@@ -43,6 +43,8 @@ class Trajectory:
     truncated: bool = False
     group_id: str | None = None
     old_log_probs: Tensor | None = None
+    pixel_values: Tensor | None = None
+    image_grid_thw: Tensor | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +221,8 @@ class ArchonTrainer:
     # ------------------------------------------------------------------
 
     def train_step(self, trajectories: list[Trajectory]) -> dict:
+        if any(trajectory.pixel_values is not None for trajectory in trajectories):
+            raise ValueError("Use NativeQwen3VLLoRATrainer for image trajectories")
         self.model.train()
 
         # Tokenize & pad

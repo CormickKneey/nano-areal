@@ -48,7 +48,7 @@ def anthropic_request_to_openai(body: dict) -> dict:
     """Messages request → the Chat Completions body vLLM already serves.
 
     Unknown top-level fields (session log, plugin inventory, betas) are not
-    forwarded. Image blocks become a placeholder until the VLM proxy lands.
+    forwarded. Inline image blocks retain their bytes for the VLM processor.
     """
     messages: list[dict] = []
     system_text = message_text(body.get("system"))
@@ -64,6 +64,7 @@ def anthropic_request_to_openai(body: dict) -> dict:
             messages.append({"role": role, "content": message_text(content)})
             continue
         text_parts: list[str] = []
+        content_parts: list[dict] = []
         tool_calls: list[dict] = []
         tool_results: list[dict] = []
         for block in content:
@@ -80,21 +81,39 @@ def anthropic_request_to_openai(body: dict) -> dict:
                     },
                 })
             elif kind == "tool_result":
+                result_content = block.get("content")
+                if isinstance(result_content, list) and any(
+                    isinstance(part, dict) and part.get("type") in {"image", "image_url"}
+                    for part in result_content
+                ):
+                    raise ValueError("Images inside tool results are not supported")
                 tool_results.append(block)
             elif kind == "thinking":
                 continue
+            elif kind == "image":
+                if role != "user":
+                    raise ValueError("Images are supported only in user messages")
+                source = block.get("source") or {}
+                if source.get("type") != "base64" or source.get("media_type") not in {
+                    "image/png", "image/jpeg", "image/webp"}:
+                    raise ValueError("Expected an inline PNG/JPEG/WebP image")
+                content_parts.append({"type": "image_url", "image_url": {
+                    "url": f"data:{source['media_type']};base64,{source.get('data', '')}"}})
             else:
                 text = _block_text(block)
                 if text:
                     text_parts.append(text)
+                    content_parts.append({"type": "text", "text": text})
         if role == "assistant":
             item: dict = {"role": "assistant", "content": "".join(text_parts)}
             if tool_calls:
                 item["tool_calls"] = tool_calls
             messages.append(item)
         else:
-            if text_parts:
-                messages.append({"role": "user", "content": "".join(text_parts)})
+            if content_parts:
+                has_image = any(part["type"] == "image_url" for part in content_parts)
+                messages.append({"role": "user", "content": content_parts if has_image
+                                 else "".join(text_parts)})
             for result in tool_results:
                 messages.append({
                     "role": "tool",

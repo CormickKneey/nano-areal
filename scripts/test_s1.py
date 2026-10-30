@@ -60,7 +60,7 @@ def test_messages_sse_shape():
             "role": "user",
             "content": [
                 {"type": "text", "text": "count"},
-                {"type": "image", "source": {"type": "base64", "data": "xx"}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "xx"}},
             ],
         }],
         "tools": [{
@@ -70,7 +70,7 @@ def test_messages_sse_shape():
         }],
     })
     assert openai["messages"][0]["role"] == "system"
-    assert "<image>" in openai["messages"][1]["content"]
+    assert openai["messages"][1]["content"][1]["image_url"]["url"] == "data:image/png;base64,xx"
     assert "dsh_session_log" not in openai
     assert openai["tools"][0]["function"]["name"] == "bash"
 

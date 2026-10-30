@@ -98,6 +98,8 @@ async def rollout_worker(
                     policy_version=rollout_version,
                     group_id=group_id,
                     old_log_probs=tt.logprobs,
+                    pixel_values=tt.pixel_values,
+                    image_grid_thw=tt.image_grid_thw,
                 )
                 await buffer.put(traj)
 

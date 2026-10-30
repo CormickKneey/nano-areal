@@ -56,6 +56,10 @@ class Qwen3VLLoRATrainer:
         self.optimizer = torch.optim.AdamW(list(self.parameters.values()), lr=lr)
 
     def response_logprobs(self, trajectory):
+        if trajectory.pixel_values is not None:
+            raise ValueError(
+                "Use the native archon trainer for multimodal trajectories"
+            )
         ids = trajectory.input_ids.to("mps").unsqueeze(0)
         positions = torch.nonzero(trajectory.response_mask[1:], as_tuple=True)[0].to(
             "mps"
@@ -183,7 +187,15 @@ class NativeQwen3VLLoRATrainer(Qwen3VLLoRATrainer):
         positions = torch.nonzero(trajectory.response_mask[1:], as_tuple=True)[0].to(
             "mps"
         )
-        logits = self.model(input_ids=ids, logits_to_keep=positions).float()
+        multimodal = {}
+        if trajectory.pixel_values is not None:
+            multimodal = {
+                "pixel_values": trajectory.pixel_values.to("mps"),
+                "image_grid_thw": trajectory.image_grid_thw.to("mps"),
+            }
+        logits = self.model(
+            input_ids=ids, logits_to_keep=positions, **multimodal
+        ).float()
         labels = ids[:, 1:][:, positions]
         return logits.log_softmax(-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
 

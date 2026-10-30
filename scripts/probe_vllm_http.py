@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 from probe_mac_vlm import memory_snapshot, red_png
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 
 from nano_areal.agent.dsh import DshAgent
 from nano_areal.engine.proxy import OpenAIProxyServer, ProxySession
@@ -28,7 +28,15 @@ async def run(args):
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     proxy = OpenAIProxyServer(
-        args.base_url + "/v1", tokenizer, port=args.proxy_port, model_name=args.model
+        args.base_url + "/v1",
+        tokenizer,
+        port=args.proxy_port,
+        model_name=args.model,
+        processor=(
+            AutoProcessor.from_pretrained(args.model_path, local_files_only=True)
+            if args.proxy_image
+            else None
+        ),
     )
     captured_tools = []
     tokenize = proxy._tokenize_messages
@@ -95,6 +103,54 @@ async def run(args):
                 assert tokenized.json()["tokens"] == result["prompt_token_ids"]
                 report["checks"][name] = result
         await proxy.start()
+        if args.proxy_image:
+            image_session = ProxySession("image-smoke", "local-image-key")
+            proxy._sessions[image_session.session_id] = image_session
+            proxy._key_to_session[image_session.api_key] = image_session.session_id
+            async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
+                response = await client.post(
+                    proxy.base_url + "/v1/messages",
+                    headers={"x-api-key": image_session.api_key},
+                    json={
+                        "model": args.model,
+                        "max_tokens": 32,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Name the color in one word.",
+                                    },
+                                    {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": "image/png",
+                                            "data": base64.b64encode(
+                                                red_png()
+                                            ).decode(),
+                                        },
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                assert "event: message_stop" in response.text
+            image_record = image_session.last_interaction()
+            assert image_record.response_content.strip().lower() == "red"
+            image_trajectory = image_record.to_trajectory()
+            report["image_proxy"] = {
+                "response": image_record.response_content,
+                "prompt_tokens": image_record.response_mask.count(0),
+                "output_tokens": image_record.response_mask.count(1),
+                "pixel_values_shape": list(image_trajectory.pixel_values.shape),
+                "image_grid_thw": image_trajectory.image_grid_thw.tolist(),
+                "behavior_logprobs": image_record.token_logprobs,
+            }
+            captured_tools.clear()
         session = ProxySession("production-smoke", "local-smoke")
         proxy._sessions[session.session_id] = session
         proxy._key_to_session[session.api_key] = session.session_id
@@ -155,6 +211,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--server-pid", type=int)
     parser.add_argument("--proxy-port", type=int, default=8001)
+    parser.add_argument("--proxy-image", action="store_true")
     parser.add_argument(
         "--output", type=Path, default=Path("artifacts/s1/vllm-http.json")
     )

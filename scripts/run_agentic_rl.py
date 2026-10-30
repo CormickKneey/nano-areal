@@ -142,6 +142,8 @@ async def run(args, report):
                                 policy_version=step,
                                 group_id=group_id,
                                 truncated=item.truncated,
+                                pixel_values=item.pixel_values,
+                                image_grid_thw=item.image_grid_thw,
                             )
                         )
                         episodes.append(

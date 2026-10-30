@@ -44,6 +44,8 @@ class InteractionRecord:
 
     # vLLM finish_reason. "length" is a truncated generation.
     finish_reason: str | None = None
+    pixel_values: torch.Tensor | None = None
+    image_grid_thw: torch.Tensor | None = None
 
     def to_trajectory(self) -> "TrajectoryTensors":
         """Convert to tensor format for the trainer."""
@@ -64,12 +66,16 @@ class InteractionRecord:
                 logprobs_tensor[pos] = lp
 
         truncated = self.finish_reason in {"length", "max_tokens"}
+        if (self.pixel_values is None) != (self.image_grid_thw is None):
+            raise ValueError("Pixels and image grid must be supplied together")
         return TrajectoryTensors(
             input_ids=input_ids,
             response_mask=response_mask,
             logprobs=logprobs_tensor,
             reward=0.0 if truncated else (self.reward or 0.0),
             truncated=truncated,
+            pixel_values=self.pixel_values,
+            image_grid_thw=self.image_grid_thw,
         )
 
 
@@ -81,3 +87,5 @@ class TrajectoryTensors:
     logprobs: torch.Tensor       # [T]  log probs (0 at prompt positions)
     reward: float
     truncated: bool = False
+    pixel_values: torch.Tensor | None = None
+    image_grid_thw: torch.Tensor | None = None

@@ -39,6 +39,7 @@ from nano_areal.engine.messages import (
     anthropic_request_to_openai,
     openai_completion_to_messages_sse,
 )
+from nano_areal.engine.multimodal import has_images, prepare_single_image
 from nano_areal.engine.types import InteractionRecord, TrajectoryTensors
 
 # ---------------------------------------------------------------------------
@@ -79,12 +80,14 @@ class OpenAIProxyServer:
         host: str = "127.0.0.1",
         port: int = 8001,
         model_name: str = "default",
+        processor=None,
     ):
         self.vllm_base_url = vllm_base_url
         self.tokenizer = tokenizer
         self.host = host
         self.port = port
         self.model_name = model_name
+        self.processor = processor
 
         self._sessions: dict[str, ProxySession] = {}
         self._key_to_session: dict[str, str] = {}   # api_key → session_id
@@ -229,7 +232,10 @@ class OpenAIProxyServer:
             # dsh sdk-minimal posts Anthropic Messages here and requires SSE.
             session = self._require_session(authorization, x_api_key)
             body = await request.json()
-            openai_body = anthropic_request_to_openai(body)
+            try:
+                openai_body = anthropic_request_to_openai(body)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
             payload = await self._handle_chat_completion(openai_body, session, return_payload=True)
             sse = openai_completion_to_messages_sse(payload)
             return StreamingResponse(iter([sse]), media_type="text/event-stream")
@@ -277,6 +283,12 @@ class OpenAIProxyServer:
                     "logprobs": t.logprobs.tolist(),
                     "reward": t.reward,
                     "truncated": t.truncated,
+                    "pixel_values": (
+                        t.pixel_values.tolist() if t.pixel_values is not None else None
+                    ),
+                    "image_grid_thw": (
+                        t.image_grid_thw.tolist() if t.image_grid_thw is not None else None
+                    ),
                 }
                 for t in tensors
             ]
@@ -298,7 +310,20 @@ class OpenAIProxyServer:
         messages: list[dict] = body.get("messages", [])
 
         # 1. Tokenize prompt
-        prompt_ids = self._tokenize_messages(messages, body.get("tools"))
+        pixel_values, image_grid_thw = None, None
+        if has_images(messages):
+            if self.processor is None:
+                raise HTTPException(
+                    422, "Image requests require an explicit local processor"
+                )
+            try:
+                prompt_ids, pixel_values, image_grid_thw = prepare_single_image(
+                    self.processor, messages, body.get("tools")
+                )
+            except (ValueError, OSError, KeyError) as error:
+                raise HTTPException(422, str(error)) from error
+        else:
+            prompt_ids = self._tokenize_messages(messages, body.get("tools"))
 
         # 2. Find parent (for multi-turn reward discount tree)
         parent_id = self._find_parent_id(messages, session)
@@ -342,16 +367,13 @@ class OpenAIProxyServer:
             token_logprobs = [lp.logprob for lp in choice.logprobs.content]
         exact = (response.model_extra or {}).get("nano_areal")
         if exact is not None:
+            expected_prompt = prompt_ids
             if (self.expected_policy_version is not None
                     and exact.get("policy_version") != self.expected_policy_version):
                 raise HTTPException(502, "Backend policy version differs from rollout version")
             prompt_ids = exact["prompt_token_ids"]
             output_ids = exact["completion_token_ids"]
             token_logprobs = exact["token_logprobs"]
-            expected_prompt = self.tokenizer.apply_chat_template(
-                messages, tools=body.get("tools"), tokenize=True,
-                add_generation_prompt=True, return_dict=False,
-            )
             if prompt_ids != expected_prompt:
                 raise HTTPException(502, "Backend prompt tokenization differs from proxy")
         elif getattr(response, "prompt_token_ids", None) is not None:
@@ -401,6 +423,8 @@ class OpenAIProxyServer:
             tool_calls=tool_calls_dict,
             parent_id=parent_id,
             finish_reason=_finish_reason(choice.finish_reason),
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
         )
         session.interactions[rid] = rec
         session._last_id = rid
@@ -524,6 +548,10 @@ class OpenAIProxyClient:
                         logprobs=torch.tensor(t["logprobs"], dtype=torch.float),
                         reward=t["reward"],
                         truncated=t.get("truncated", False),
+                        pixel_values=(torch.tensor(t["pixel_values"], dtype=torch.float32)
+                                      if t.get("pixel_values") is not None else None),
+                        image_grid_thw=(torch.tensor(t["image_grid_thw"], dtype=torch.long)
+                                        if t.get("image_grid_thw") is not None else None),
                     )
                     for t in r.json()
                 ]
