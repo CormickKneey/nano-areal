@@ -312,6 +312,7 @@ class OpenAIProxyServer:
             "top_p": body.get("top_p", 1.0),
             "logprobs": True,
             "top_logprobs": 1,
+            "extra_body": {"return_token_ids": True, "top_k": -1},
         }
         if body.get("tools"):
             vllm_kwargs["tools"] = body["tools"]
@@ -353,8 +354,21 @@ class OpenAIProxyServer:
             )
             if prompt_ids != expected_prompt:
                 raise HTTPException(502, "Backend prompt tokenization differs from proxy")
-        elif tool_calls_raw:
-            raise HTTPException(502, "Tool trajectories require exact backend token IDs")
+        elif getattr(response, "prompt_token_ids", None) is not None:
+            backend_prompt = response.prompt_token_ids
+            output_ids = getattr(choice, "token_ids", None)
+            if backend_prompt != prompt_ids:
+                raise HTTPException(502, "Backend prompt tokenization differs from proxy")
+            if self.expected_policy_version is not None:
+                raise HTTPException(502, "Backend does not report a policy version")
+            prompt_ids = backend_prompt
+            if (response.usage is None
+                    or response.usage.prompt_tokens != len(prompt_ids)
+                    or output_ids is None
+                    or response.usage.completion_tokens != len(output_ids)):
+                raise HTTPException(502, "Backend token IDs differ from usage")
+        else:
+            raise HTTPException(502, "Trajectories require exact backend token IDs")
         if not output_ids or len(token_logprobs) != len(output_ids):
             raise HTTPException(502, "Missing or misaligned behavior logprobs")
         if not all(math.isfinite(value) and value <= 0 for value in token_logprobs):

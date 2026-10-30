@@ -27,7 +27,7 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(NotImplementedError, "run_agentic_rl.py"):
             await train.main_async(SimpleNamespace(agent="dsh", backend="metal"))
 
-    async def capture(self, exact=None, logprobs=None):
+    async def capture(self, exact=None, logprobs=None, native=None):
         tokenizer = SimpleNamespace(
             apply_chat_template=lambda *args, **kwargs: [1, 2],
             __call__=lambda *args, **kwargs: SimpleNamespace(input_ids=[3]),
@@ -50,6 +50,9 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         }
         if exact is not None:
             payload["nano_areal"] = exact
+        if native is not None:
+            payload.update(prompt_token_ids=native["prompt"], usage=native["usage"])
+            payload["choices"][0]["token_ids"] = native["output"]
         server._vllm = SimpleNamespace(
             chat=SimpleNamespace(
                 completions=SimpleNamespace(
@@ -59,13 +62,48 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
-        server.expected_policy_version = 0
+        server.expected_policy_version = 0 if native is None else None
         session = ProxySession("session", "local-test-key")
         await server._handle_chat_completion(
             {"messages": [{"role": "user", "content": "test"}]},
             session,
         )
         return session.last_interaction()
+
+    async def test_native_vllm_ids_include_stop(self):
+        record = await self.capture(
+            logprobs={
+                "content": [
+                    {"token": "one", "logprob": -0.5, "top_logprobs": []},
+                    {"token": "stop", "logprob": -0.1, "top_logprobs": []},
+                ]
+            },
+            native={
+                "prompt": [1, 2],
+                "output": [3, 9],
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 2,
+                    "total_tokens": 4,
+                },
+            },
+        )
+        self.assertEqual(record.input_ids, [1, 2, 3, 9])
+        self.assertEqual(record.token_logprobs, [-0.5, -0.1])
+
+    async def test_native_vllm_usage_mismatch_rejected(self):
+        with self.assertRaises(HTTPException):
+            await self.capture(
+                native={
+                    "prompt": [1, 2],
+                    "output": [3],
+                    "usage": {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 2,
+                        "total_tokens": 4,
+                    },
+                },
+            )
 
     async def test_exact_backend_ids_include_stop_without_retokenizing(self):
         record = await self.capture(
@@ -113,15 +151,24 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
     async def test_export_preserves_truncation_and_closes_client(self):
         def handler(request):
             if request.url.path == "/export_trajectories":
-                return httpx.Response(200, json=[{
-                    "input_ids": [1, 2], "response_mask": [0, 1],
-                    "logprobs": [0, -0.5], "reward": 0, "truncated": True,
-                }])
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "input_ids": [1, 2],
+                            "response_mask": [0, 1],
+                            "logprobs": [0, -0.5],
+                            "reward": 0,
+                            "truncated": True,
+                        }
+                    ],
+                )
             return httpx.Response(200, json={"ok": True})
 
         client = OpenAIProxyClient("http://127.0.0.1:8001")
         client._http = httpx.AsyncClient(
-            base_url=client.proxy_base_url, transport=httpx.MockTransport(handler),
+            base_url=client.proxy_base_url,
+            transport=httpx.MockTransport(handler),
         )
         client.session_id, client.api_key = "test-session", "local-test-key"
         await client.__aexit__(None, None, None)
