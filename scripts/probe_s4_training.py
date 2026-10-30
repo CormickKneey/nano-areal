@@ -360,10 +360,28 @@ def main():
         report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])
     except BaseException as error:
         report.update(status="error", error_type=type(error).__name__, error=str(error))
+        try:
+            report["memory_after"] = memory_snapshot(os.getpid())
+            report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])
+        except Exception as measurement_error:
+            report["memory_after_error"] = {
+                "type": type(measurement_error).__name__,
+                "message": str(measurement_error),
+            }
         raise
     finally:
         if aligned_runtime is not None:
-            aligned_runtime.close()
+            try:
+                aligned_runtime.close()
+            except Exception as cleanup_error:
+                report["cleanup_error"] = {
+                    "type": type(cleanup_error).__name__, "message": str(cleanup_error),
+                }
+                if report["status"] != "error":
+                    report.update(
+                        status="error", error_type=type(cleanup_error).__name__,
+                        error=str(cleanup_error),
+                    )
         if trace and trace.thread.ident is not None:
             report["memory_trace"] = trace.finish()
             if "memory_after" in report:

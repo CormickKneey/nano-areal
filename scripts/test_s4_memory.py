@@ -10,6 +10,8 @@ import pytest
 import torch
 from probe_s4_training import MemoryTrace
 
+from nano_areal.archon import s4_native
+
 
 def test_empty_memory_trace_does_not_query_mps(monkeypatch):
     def unavailable():
@@ -69,12 +71,18 @@ def test_partial_memory_trace_is_not_qualified(monkeypatch):
     assert report["sampler_error"]["message"] == "Allocator failed"
 
 
-def test_sampler_failure_preserves_primary_error_report(monkeypatch, tmp_path):
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_sampler_failure_preserves_primary_error_report(
+    monkeypatch, tmp_path, cleanup_failure,
+):
     def unavailable():
         raise RuntimeError("MPS unavailable")
 
-    def load_failure(path):
+    def load_failure(path=None):
         raise ValueError("Primary load failure")
+
+    def fail_cleanup():
+        raise RuntimeError("Cleanup failed")
 
     binding = SimpleNamespace(
         verify_files=lambda: None,
@@ -83,9 +91,12 @@ def test_sampler_failure_preserves_primary_error_report(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", [
         "probe_s4_training.py", "update", "--infer-model", "unused",
         "--train-model", "unused", "--output", str(tmp_path), "--group", "unused",
+        "--aligned-arithmetic",
     ])
     monkeypatch.setattr(probe_s4_training, "require_stopped_server", lambda: None)
-    monkeypatch.setattr(probe_s4_training, "memory_snapshot", lambda process: {})
+    monkeypatch.setattr(probe_s4_training, "memory_snapshot", lambda process: {
+        "swap": "used = 0M",
+    })
     monkeypatch.setattr(probe_s4_training, "command_output", lambda command: "")
     monkeypatch.setattr(probe_s4_training, "PolicyBinding", SimpleNamespace(
         read=lambda path: binding,
@@ -95,6 +106,17 @@ def test_sampler_failure_preserves_primary_error_report(monkeypatch, tmp_path):
     monkeypatch.setattr(probe_s4_training, "NativeQwen3VLLoRATrainer", load_failure)
     monkeypatch.setattr(torch.mps, "recommended_max_memory", unavailable)
     monkeypatch.setattr(torch, "manual_seed", lambda seed: None)
+    if cleanup_failure:
+        trainer = SimpleNamespace(
+            model=SimpleNamespace(eval=lambda: None), parameters={},
+        )
+        runtime = SimpleNamespace(contract=load_failure, close=fail_cleanup)
+        monkeypatch.setattr(probe_s4_training, "NativeQwen3VLLoRATrainer",
+                            lambda path: trainer)
+        monkeypatch.setattr(probe_s4_training, "restore", lambda *args: None)
+        monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
+        monkeypatch.setattr(s4_native, "load_affine_projections", lambda binding: {})
+        monkeypatch.setattr(s4_native, "AlignedS4Runtime", lambda *args: runtime)
     with pytest.raises(ValueError, match="Primary load failure"):
         probe_s4_training.main()
     report = json.loads((tmp_path / "update.json").read_text())
@@ -103,3 +125,6 @@ def test_sampler_failure_preserves_primary_error_report(monkeypatch, tmp_path):
     assert report["updates"] == 0
     assert report["memory_trace"]["sampling_valid"] is False
     assert report["memory_trace"]["sampler_error"]["message"] == "MPS unavailable"
+    assert report["memory_gate"]["passed"] is False
+    if cleanup_failure:
+        assert report["cleanup_error"]["message"] == "Cleanup failed"
