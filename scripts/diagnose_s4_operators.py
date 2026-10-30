@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--fused-swiglu", action="store_true")
     parser.add_argument("--dense-head", action="store_true")
     parser.add_argument("--prefill-head", action="store_true")
+    parser.add_argument("--fp32-attention", action="store_true")
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Diagnostic evidence must not be overwritten")
@@ -60,6 +61,15 @@ def main():
     context = {}
     handles = []
     original_rope = native_model.apply_rope
+    original_attention = torch.nn.functional.scaled_dot_product_attention
+    if args.fp32_attention:
+        def attention(query, key, value, *arguments, **options):
+            output = original_attention(
+                query.float(), key.float(), value.float(), *arguments, **options
+            )
+            return output.to(query.dtype)
+
+        torch.nn.functional.scaled_dot_product_attention = attention
     if args.fp32_rope:
         def apply_rope(query, key, cos, sin):
             rotated = original_rope(query.float(), key.float(), cos, sin)
@@ -145,6 +155,7 @@ def main():
               "fused_swiglu": args.fused_swiglu,
               "dense_head": args.dense_head,
               "prefill_head": args.prefill_head,
+              "fp32_attention": args.fp32_attention,
               "turns": []}
     started = time.monotonic()
     try:
@@ -194,6 +205,7 @@ def main():
         raise
     finally:
         native_model.apply_rope = original_rope
+        torch.nn.functional.scaled_dot_product_attention = original_attention
         for handle in handles:
             handle.remove()
     print(json.dumps({key: value for key, value in report.items() if key != "turns"}))

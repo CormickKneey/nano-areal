@@ -1,5 +1,93 @@
 # S4 production policy preflight: October 30, 2026
 
+## Continue5: isolated decode rounding, parity still blocked
+
+The first remaining gate was investigated without starting production, adding
+rollout starts, changing any policy manifest, or updating an adapter. Original
+S1/S2/S3 and bounded S4 coding acceptance are unchanged. **Full S4 training is
+not accepted; updates remain 0.** The bound stays **MAE <= 0.01**.
+
+An isolated actual-checkpoint experiment identifies an input-dependent
+rounding difference, not just a different dequantized weight. In the installed
+MLX Metal `quantized.h`, the 4-bit `load_vector` bias sum adds groups of four
+bf16 inputs before promotion to float32. The measured single-row quantized
+path therefore differs from multiplying either bf16 or float32 dequantized
+weights. A reference adds the bias-weighted difference between rounded
+four-value sums and float32 sums to the float32 affine product.
+
+`artifacts/s4/policy-aligned-audit/affine-isolation.json` uses seed 42,
+bf16 standard-normal inputs, and the actual layer-0 tensors:
+
+| Projection / input rows | bf16 dense MAE | float32 affine MAE | corrected MAE / max |
+| --- | ---: | ---: | ---: |
+| q_proj, 2560 -> 4096 / 1 | 0.00600267 | 0.00577891 | 0 / 0 |
+| down_proj, 9728 -> 2560 / 1 | 0.01183670 | 0.01161732 | 0 / 0 |
+| q_proj / 128 | 0 | 0.00126842 | 0.00647333 / 0.078125 |
+| down_proj / 128 | 0 | 0.00253158 | 0.01303589 / 0.25 |
+
+The correction is specific to the measured decode path: applying it to the
+128-row prefill path **makes results worse**. It is not a universal replacement
+for linear layers. `nano_areal/archon/s4_operators.py` is a diagnostic reference,
+not installed by the trainer. A separate synthetic MLX comparison independently
+checks the PyTorch formula and its finite/nonzero input gradients.
+
+Whole-group counterfactuals still fail. All use the same untouched complete
+HumanEval/0 group, **9 turns / 636 response tokens**, policy
+`s4-policy-v0-d43b14bef7d62f10`, rewards [1,1], advantages [0,0]. Files below
+are under `artifacts/s4/policy-aligned-audit/`; these are diagnostics, not newly
+bound rollout preflights:
+
+| Diagnostic file | MAE | Seconds |
+| --- | ---: | ---: |
+| decode-operator-diagnostic.json | 0.01241930111 | 66.46 |
+| decode-rms-diagnostic.json | 0.01419322152 | 68.62 |
+| decode-rms-rope-diagnostic.json | 0.01281768727 | 70.18 |
+| decode-fused-all-diagnostic.json | 0.01309490551 | 72.06 |
+| dense-fused-all-diagnostic.json | 0.01323832762 | 47.15 |
+| decode-prefill-head-diagnostic.json | 0.01241974193 | 65.46 |
+| head-bias-rounding-diagnostic.json | 0.01090651186 | 40.68 |
+| head-fp32-attention-diagnostic.json | 0.01197469242 | 41.93 |
+
+The hook-based diagnostic separates generated rows from prompt rows, optionally
+checks single-rounding RMSNorm, float32 RoPE, fused SwiGLU, and a dense first
+prefill head. The final variant also isolates float32 SDPA accumulation;
+it does not close parity. These are isolated hypotheses, **not proof of the production
+prefill/decode/cache execution schedule**. The head-only correction still has
+maximum token error **0.49179697**. None closes the group gate, and none is
+enabled in existing production or training paths. The original bound
+preflights **0.00486984 /53** and **0.01112227 sampled /0**, float32-head-only
+**0.01057059**, and unaligned **0.10771345 / 0.10248081** remain unchanged.
+
+Reproduce the final head-isolation counterfactual with a new output filename:
+
+```bash
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+# Keep the owned production API AND engine stopped.
+.venv/bin/python scripts/diagnose_s4_operators.py \
+  --policy artifacts/s4/policy-aligned/policy-v0.json \
+  --group artifacts/s4/policy-sampled-0 \
+  --dense-projections --prefill-head \
+  --output artifacts/s4/policy-aligned-audit/head-rounding-reproduce.json
+.venv/bin/python -m pytest -q scripts/test_s4_operators.py \
+  --basetemp=.s1-cache/tmp/pytest-operator-reproduce
+```
+
+The diagnostic refuses existing output files and live production listeners,
+checks policy files and complete-group provenance, and records source/evidence
+hashes, completion/error status, and per-turn errors. Diagnostic exit success
+means the experiment completed, **not** that policy parity passed.
+
+No additional sampling is unlocked: cumulative declared sampling stays
+**24/49**, with **25 failures retained**. No informative complete group,
+changed adapter, v1 feedback, or backward/optimizer/export memory result is
+claimed. The next numerical investigation must account for actual production
+prefill/decode segmentation, cache reuse, and attention arithmetic before
+binding and measuring a new operator policy. Validation: **108 regression
+tests pass**, targeted Ruff and `git diff --check` pass. No production server
+was started during this continuation.
+
 ## Aligned-base continuation
 
 `scripts/align_s4_base.py` exports the actual served affine 4-bit tensors using

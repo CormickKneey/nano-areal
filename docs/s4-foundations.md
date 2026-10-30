@@ -2,6 +2,14 @@
 
 ## Status: bounded coding gate passes; training remains unaccepted
 
+Continue5 isolates MLX single-token affine bias-sum rounding: a diagnostic
+reference exactly matches two isolated actual-checkpoint projections, but
+whole sampled /0 still fails (head-isolation MAE **0.01090651**, bound **0.01**).
+No production/trainer operators are changed and no new rollout starts occur.
+Declared sampling remains **24/49**, **25 failures retained**; updates remain
+**0**. See [operator investigation](s4-training.md). Regression coverage is now
+**108 tests**; this does not qualify backward memory or full S4 training.
+
 S3's unchanged BFCL fixture now passes 2/2 under production hermes; see
 `docs/s3-multimodal.md`. On the same production backend, the final fixed S4
 configuration solves **HumanEval/53 2/2 and HumanEval/0 2/2** with official
