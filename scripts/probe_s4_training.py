@@ -1,20 +1,24 @@
-"""Bounded native/production policy preflight; never hide failed update gates."""
+"""Sequential policy preflight, bounded single-step update and immutable export."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
+import resource
+import socket
+import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
-from probe_mac_vlm import memory_snapshot
+from probe_mac_vlm import command_output, memory_snapshot
 from safetensors.torch import load_file
 
 from nano_areal.archon.losses import group_advantages
 from nano_areal.archon.qwen3vl_lora import NativeQwen3VLLoRATrainer
+from nano_areal.archon.s4_update import bounded_step, trajectory_from_turn
 from nano_areal.sync.policy import PolicyBinding, checkpoint_files, file_digest
 
 
@@ -60,26 +64,88 @@ def complete_group(directory, binding):
     return episodes
 
 
+class MemoryTrace:
+    def __init__(self):
+        self.samples = []
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.sample, daemon=True)
+
+    def sample(self):
+        while not self.stop_event.is_set():
+            self.samples.append({
+                "mps_allocated_bytes": torch.mps.current_allocated_memory(),
+                "mps_driver_bytes": torch.mps.driver_allocated_memory(),
+            })
+            self.stop_event.wait(0.1)
+
+    def finish(self):
+        self.stop_event.set()
+        self.thread.join()
+        return {
+            "scope": "100ms sampled MPS peaks, not allocator-exact peaks",
+            "samples": len(self.samples),
+            "mps_allocated_peak_bytes": max(
+                row["mps_allocated_bytes"] for row in self.samples
+            ),
+            "mps_driver_peak_bytes": max(
+                row["mps_driver_bytes"] for row in self.samples
+            ),
+            "process_rss_highwater_bytes": resource.getrusage(
+                resource.RUSAGE_SELF
+            ).ru_maxrss,
+            "mps_recommended_max_bytes": torch.mps.recommended_max_memory(),
+        }
+
+
+def require_stopped_server():
+    try:
+        connection = socket.create_connection(("127.0.0.1", 8000), timeout=0.5)
+    except ConnectionRefusedError:
+        return
+    connection.close()
+    raise ValueError("Stop the owned production server before loading native weights")
+
+
+def swap_used_mib(snapshot):
+    match = re.search(r"used = ([\d.]+)M", snapshot["swap"])
+    if not match:
+        raise ValueError("Unable to parse macOS swap measurement")
+    return float(match.group(1))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("prepare", "preflight"))
+    parser.add_argument("phase", choices=("prepare", "preflight", "update"))
     parser.add_argument("--infer-model", type=Path, required=True)
     parser.add_argument("--train-model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--group", type=Path)
+    parser.add_argument("--policy-version", type=int, choices=(0, 1), default=0)
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
+    if args.phase != "preflight" and args.policy_version != 0:
+        parser.error("Prepare/update only accepts v0; update creates immutable v1")
+    if args.phase != "prepare" and args.group is None:
+        parser.error("Preflight/update requires a complete episode group")
+    require_stopped_server()
     args.output.mkdir(parents=True, exist_ok=True)
-    path = args.output / f"{args.phase}.json"
+    suffix = f"-v{args.policy_version}" if args.policy_version else ""
+    path = args.output / f"{args.phase}{suffix}.json"
+    if args.phase == "update" and any(item.exists() for item in (
+        path, args.output / "adapter-v1", args.output / "policy-v1.json",
+    )):
+        parser.error("Immutable update evidence already exists; do not overwrite it")
     report = {
         "status": "started", "phase": args.phase,
         "scope": "S4 native / production training preflight",
         "memory_before": memory_snapshot(os.getpid()),
+        "memory_pressure_before": command_output(["memory_pressure", "-Q"]),
         "updates": 0, "elapsed_seconds": 0,
     }
     started = time.monotonic()
+    trace = MemoryTrace() if args.phase == "update" else None
 
     def save():
         report["elapsed_seconds"] = time.monotonic() - started
@@ -87,6 +153,10 @@ def main():
 
     save()
     try:
+        if args.phase == "update" and (args.output / "adapter-v1").exists():
+            raise FileExistsError("Immutable v1 adapter already exists")
+        if trace:
+            trace.thread.start()
         torch.manual_seed(42)
         trainer = NativeQwen3VLLoRATrainer(args.train_model)
         trainer.model.eval()
@@ -95,8 +165,8 @@ def main():
         report["trainable_parameters"] = sum(
             parameter.numel() for parameter in trainer.parameters.values()
         )
-        adapter = args.output / "adapter-v0"
-        manifest_path = args.output / "policy-v0.json"
+        adapter = args.output / f"adapter-v{args.policy_version}"
+        manifest_path = args.output / f"policy-v{args.policy_version}.json"
         if args.phase == "prepare":
             previous = {
                 name: value.detach().cpu().clone()
@@ -144,16 +214,10 @@ def main():
                 for turn, item in enumerate(episode["turns"]):
                     if item["truncated"]:
                         raise ValueError("Truncated group cannot be used for training")
-                    trajectory = SimpleNamespace(
-                        input_ids=torch.tensor(item["input_ids"]),
-                        response_mask=torch.tensor(item["response_mask"]),
-                        pixel_values=None,
-                    )
+                    trajectory, captured = trajectory_from_turn(item)
                     with torch.no_grad():
                         current = trainer.response_logprobs(trajectory).cpu()[0]
-                    old = torch.tensor(item["old_log_probs"])[
-                        trajectory.response_mask.bool()
-                    ]
+                    old = captured[trajectory.response_mask]
                     error = (current - old).abs()
                     if not bool(torch.isfinite(error).all()):
                         raise ValueError("Nonfinite policy comparison")
@@ -194,15 +258,83 @@ def main():
                 )
             if not report["blockers"]:
                 report["status"] = "preflight-passed-no-update"
+            if args.phase == "update" and not report["blockers"]:
+                report["phase_memory"] = []
+
+                def snapshot(stage):
+                    if stage == "optimizer":
+                        report["updates"] = 1
+                    torch.mps.synchronize()
+                    report["phase_memory"].append({
+                        "stage": stage, **memory_snapshot(os.getpid()),
+                        "mps_allocated_bytes": torch.mps.current_allocated_memory(),
+                        "mps_driver_bytes": torch.mps.driver_allocated_memory(),
+                    })
+                    save()
+
+                report["optimizer"] = bounded_step(trainer, episodes, snapshot)
+                report["updates"] = report["optimizer"]["optimizer_steps"]
+                changed = args.output / "adapter-v1"
+                trainer.export_peft_adapter(changed)
+                snapshot("export")
+                before = file_digest(adapter / "adapter_model.safetensors")
+                after = file_digest(changed / "adapter_model.safetensors")
+                if before == after:
+                    raise ValueError("Exported adapter did not change")
+                previous = {name: value.detach().cpu().clone()
+                            for name, value in trainer.parameters.items()}
+                restore(trainer, changed)
+                if not all(torch.equal(previous[name], value.detach().cpu())
+                           for name, value in trainer.parameters.items()):
+                    raise ValueError("Updated PEFT export is not an exact roundtrip")
+                updated = PolicyBinding({
+                    **{key: value for key, value in binding.manifest.items()
+                       if key != "model"}, "version": 1,
+                    "adapter": str(changed.resolve()),
+                    "adapter_files": {str(item.resolve()): file_digest(item)
+                                      for item in sorted(changed.iterdir())},
+                    "parent_policy": binding.model,
+                    "complete_group_files": {
+                        str(item.resolve()): file_digest(item)
+                        for item in [args.group / "report.json", *[
+                            args.group / f"episode-{index}.json"
+                            for index in range(len(episodes))
+                        ]]
+                    },
+                })
+                updated.write(args.output / "policy-v1.json")
+                report.update(status="updated-exported-feedback-pending",
+                              model=updated.model, adapter_sha256_before=before,
+                              adapter_sha256_after=after, adapter_roundtrip_exact=True)
             binding.verify_files()
         report["memory_after"] = memory_snapshot(os.getpid())
+        report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])
     except BaseException as error:
         report.update(status="error", error_type=type(error).__name__, error=str(error))
         raise
     finally:
+        if trace and trace.thread.ident is not None:
+            report["memory_trace"] = trace.finish()
+            if "memory_after" in report:
+                report["memory_gate"] = {
+                    "scope": "Measured bounded sequences only; not 8192-token training",
+                    "swap_growth_mib": swap_used_mib(report["memory_after"])
+                    - swap_used_mib(report["memory_before"]),
+                    "driver_within_recommended_budget": (
+                        report["memory_trace"]["mps_driver_peak_bytes"]
+                        <= report["memory_trace"]["mps_recommended_max_bytes"]
+                    ),
+                }
+                gate = report["memory_gate"]
+                gate["passed"] = (gate["swap_growth_mib"] <= 0
+                                  and gate["driver_within_recommended_budget"])
+                if report["updates"] and not gate["passed"]:
+                    report["status"] = "updated-exported-memory-blocked"
         save()
     print(json.dumps(report, indent=2), flush=True)
-    passed = report["status"] in {"prepared", "preflight-passed-no-update"}
+    passed = report["status"] in {
+        "prepared", "preflight-passed-no-update", "updated-exported-feedback-pending",
+    }
     return 0 if passed else 2
 
 

@@ -44,6 +44,43 @@ checkpoint paths/hashes against the binding and rejects an MAE bound above
 0.01. Full training, nonzero export, feedback and backward memory remain
 unaccepted pending subsequent measurements.
 
+### Bounded update contract
+
+The opt-in `update` phase rechecks the complete group and the unchanged 0.01
+behavior bound in the same native process before backward. It performs exactly
+one AdamW step, using one advantage per externally verified episode, repeated
+across its turns. Loss is averaged over response tokens within each episode,
+then equally over episodes. Turn discounts never create episode advantages.
+Homogeneous groups exit without backward or an optimizer step. The reference
+is the frozen aligned base with adapters disabled, not another resident model.
+
+The update has a 600-second between-turn deadline, finite-gradient checks,
+gradient clipping, and nonzero gradient/delta checks. It exports immutable
+`adapter-v1`, checks an exact PEFT roundtrip and changed tensor-file SHA-256,
+and binds a new `policy-v1.json` to its parent and complete-group file hashes.
+Existing update evidence or v1 output is never overwritten. A live local
+production listener blocks native loading. Production must subsequently restart
+on v1; an exported adapter alone is not feedback acceptance.
+
+Memory qualification requires sampled MPS driver usage within PyTorch's
+recommended device budget and no increase in system swap used. Existing swap
+is reported separately. A 100ms sampler records MPS allocated/driver peaks;
+process RSS high-water and synchronized forward/backward/optimizer/export
+snapshots are also retained. These are sampled, not allocator-exact peaks,
+and only qualify the measured bounded sequences, never 8192-token training or
+co-residency. Failing the memory gate remains a blocked result even after an
+optimizer/export succeeds.
+
+```bash
+# Stop the owned API/engine first. Run only with an informative COMPLETE group.
+PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py update \
+  --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+  --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+  --output artifacts/s4/policy-aligned --group "$COMPLETE_GROUP"
+# Restart production using policy-v1.json / adapter-v1, collect fresh episodes,
+# stop it again, then preflight the fresh group with --policy-version 1.
+```
+
 ## Result: training acceptance blocked, not a completed update
 
 S1/S2 and the measured S3 gates remain unchanged. The coding gates remain

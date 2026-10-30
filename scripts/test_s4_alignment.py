@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from align_s4_base import hf_key
 from probe_s4 import training_eligible
-from probe_s4_training import complete_group
+from probe_s4_training import complete_group, require_stopped_server
 
 from nano_areal.archon.losses import group_advantages
 from nano_areal.sync.policy import PolicyBinding
@@ -85,6 +85,20 @@ def test_all_success_advantages_stay_zero():
 
     advantages, _ = group_advantages(torch.tensor([1.0, 1.0]), 2)
     assert advantages.tolist() == [0.0, 0.0]
+
+
+def test_native_loading_requires_stopped_production(monkeypatch):
+    connection = SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr("probe_s4_training.socket.create_connection",
+                        lambda *args, **kwargs: connection)
+    with pytest.raises(ValueError, match="Stop the owned production"):
+        require_stopped_server()
+
+    def refused(*args, **kwargs):
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr("probe_s4_training.socket.create_connection", refused)
+    require_stopped_server()
 
 
 def test_mlx_alignment_roundtrip(tmp_path):
