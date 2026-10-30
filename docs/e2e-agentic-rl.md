@@ -1,5 +1,11 @@
 # Real-model dsh / Metal GRPO smoke
 
+> October 30 follow-up: production vllm-metal HTTP is now verified and the
+> custom archon passes real bf16 text/image parity. See `s1-mac-smoke.md`,
+> `s2-archon.md`, and `s3-multimodal.md` for current status. The measurements
+> and remaining-work list here describe the historical October 29 bandit;
+> they are not S3/S4 acceptance and were not rerun for the later milestones.
+
 ## Result and acceptance boundary
 
 Measured on **2026-10-29**, on the Mac mini M4 with 32 GiB unified memory,

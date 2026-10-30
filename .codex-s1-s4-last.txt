@@ -1,0 +1,60 @@
+Date: 2026-10-30 (Asia/Shanghai)
+Repository: /Volumes/workspace/github/nano-areal
+Branch: cursor/macos-qwen3vl-v02-plan-f4cf
+PR: #4, keep OPEN; no merge or force-push performed.
+
+Stage: S1 functional gate passed; S2 passed; S3 foundation partial; S4 not started.
+
+Milestone commits (pushed):
+31d91b2 feat(s1): verify production Metal HTTP path
+637bd2b feat(archon): add native Qwen3-VL parity
+3a5a2cc feat(proxy): scaffold multimodal trajectories
+
+S1: official vllm 0.32.0+cpu / vllm-metal 0.32.0 HTTP text/image passed.
+Native prompt/generated IDs, logprobs, usage and backend tokenization agree.
+Real dsh sdk-minimal through /v1/messages completed with S1_OK and 3 schemas;
+final S1 replay measured 561 prompt / 4 output tokens.
+The core wheel download is fixed, ZIP-valid and repository-local.
+Separate bf16 LoRA step passed, but S1 swap reached 832.81 MiB; active,
+pressure-free co-residency and 8192-token training are NOT qualified.
+
+S2: custom forward, interleaved M-RoPE, ViT, DeepStack, strict checkpoint
+mapping, frozen-base language q/v LoRA and MLX adapter export implemented.
+Full real 4B bf16 text/image logits have max error 0 (atol 0.02, rtol 0).
+Three short MPS steps passed; largest driver boundary 9,944,383,488 bytes;
+no additional swap at sampled boundaries. No HF forward in native model.
+
+S3: real production image Messages proxy passed (Red, 81 prompt / 2 output,
+pixels [256,1536], grid [[1,16,16]]). Image metadata survives JSON export.
+Local CLEVR loader and bounded loss-drop runner exist. Actual official data
+is absent; attempted run failed with FileNotFoundError before model loading:
+.s1-cache/datasets/CLEVR_v1.0/questions/CLEVR_train_questions.json
+Offline BFCL two-turn flow passes, but model-backed BFCL accuracy comparison
+and real CLEVR loss-drop remain unmeasured. S3 is NOT accepted yet.
+
+Validation: 68 tests pass; targeted Ruff checks for new modules/runners pass.
+All owned production server processes were stopped; no multi-hour training
+was started. OrbStack, mounts, credentials and unrelated user files unchanged.
+
+Reproduce (from repository root):
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg"
+PYTHONPATH=. .venv/bin/python -m pytest -q
+PYTHONPATH=. .venv/bin/python scripts/test_archon_parity.py --device mps --atol 0.02 --steps 3
+For production server startup/install: docs/s1-mac-smoke.md, current section.
+After startup: PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py --proxy-image --output artifacts/s3/vllm-image-proxy.json
+After installing local official CLEVR data, stop inference before:
+PYTHONPATH=. .venv/bin/python scripts/train_clevr_l0.py --data-root .s1-cache/datasets/CLEVR_v1.0 --device mps --samples 1 --steps 5 --max-context 1024
+
+S4 next: finish S3 gates, provision a real nano-swe task checkout plus trusted
+hidden tests outside the task workspace, start production serving, then use
+the explicit one-episode shell command in docs/s3-multimodal.md under
+"S4 next command". That command is a starting smoke, not S4 acceptance.
+Implement persistent dsh session-log capture/reconciliation, require real
+tools and multiple turns, count test/task denominators and failure classes,
+and validate production adapter/version synchronization before RL training.
+The accepted digit bandit (a0a9a86) is unchanged and is not S4.
+
+Measured evidence (ignored): artifacts/s1/, artifacts/s2/, artifacts/s3/.
+Documentation: docs/s1-mac-smoke.md, docs/s2-archon.md, docs/s3-multimodal.md.
