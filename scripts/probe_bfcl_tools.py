@@ -15,29 +15,53 @@ from nano_areal.dataset import BFCLSample
 
 async def probe(args):
     report = {"parser": args.parser, "fixtures": {}}
-    tool = {"type": "function", "function": {
-        "name": "ls", "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}}}}}
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "ls",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        },
+    }
     for label, turns in (
         ("exact", ["List files", "Again"]),
-        ("explicit-path", ["List files in directory . using ls(path=\".\").",
-                           "Again, call ls for path ."]),
+        (
+            "explicit-path",
+            [
+                'List files in directory . using ls(path=".").',
+                "Again, call ls for path .",
+            ],
+        ),
     ):
         responses = []
+
         async def capture(response):
             await response.aread()
             responses.append(response.json())
+
         sample = BFCLSample(
-            "offline-two-turn-ls", [[{"role": "user", "content": text}] for text in turns],
-            [tool], [{"ls": {"path": ["."]}}] * 2, {}, [],
+            "offline-two-turn-ls",
+            [[{"role": "user", "content": text}] for text in turns],
+            [tool],
+            [{"ls": {"path": ["."]}}] * 2,
+            {},
+            [],
         )
         async with httpx.AsyncClient(event_hooks={"response": [capture]}) as client:
-            rewards = await BFCLAgent(temperature=0, max_tokens=128, model_name=args.model).run(
-                sample, base_url=args.base_url, api_key="local",
+            rewards = await BFCLAgent(
+                temperature=0, max_tokens=128, model_name=args.model
+            ).run(
+                sample,
+                base_url=args.base_url,
+                api_key="local",
                 http_client=client,
             )
-        report["fixtures"][label] = {"rewards": list(rewards.values()),
-                                      "responses": responses}
+        report["fixtures"][label] = {
+            "rewards": list(rewards.values()),
+            "responses": responses,
+        }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

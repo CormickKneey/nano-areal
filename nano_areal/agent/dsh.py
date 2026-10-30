@@ -14,10 +14,14 @@ Verified against deepseek-ai/deepseek-harness master (SDK README +
 - Auth header on the model request is ``x-api-key``, not ``Authorization``.
 - ``RunResult.finish_reason`` is ``completed``, ``max-tokens``, ``error``, or None.
 """
+
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
+import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -61,12 +65,38 @@ def build_dsh_kwargs(
 
 
 def episode_reward(finish_reason: str | None, verified: float | None) -> float:
-    """``max-tokens`` / ``error`` / missing reason score 0. A clean exit is not a reward."""
+    """Only a completed, independently verified episode earns a reward."""
     if finish_reason != "completed":
         return 0.0
     if verified is None:
         return 0.0
     return float(verified)
+
+
+def run_with_deadline(harness, prompt: str, timeout_seconds: float):
+    """Close the owned runtime at the activity deadline, then join the watchdog."""
+    expired = threading.Event()
+
+    def expire():
+        expired.set()
+        harness.close()
+
+    timer = threading.Timer(timeout_seconds, expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        try:
+            result = harness.run(prompt)
+        except Exception as error:
+            if expired.is_set():
+                raise TimeoutError("dsh episode activity deadline exceeded") from error
+            raise
+        if expired.is_set():
+            raise TimeoutError("dsh episode activity deadline exceeded")
+        return result
+    finally:
+        timer.cancel()
+        timer.join()
 
 
 def task_prompt(data: Any) -> str:
@@ -106,6 +136,7 @@ class DshAgent(AgentBase):
         max_output_tokens: int = 1024,
         patches: tuple[str, ...] = (),
         timeout_seconds: float = 600.0,
+        session_log_dir: str | None = None,
     ):
         self.model_name = model_name
         self.profile = profile
@@ -113,7 +144,10 @@ class DshAgent(AgentBase):
         self.context_window_tokens = context_window_tokens
         self.max_output_tokens = max_output_tokens
         self.patches = patches
+        if timeout_seconds <= 0:
+            raise ValueError("dsh timeout must be positive")
         self.timeout_seconds = timeout_seconds
+        self.session_log_dir = session_log_dir
         self.last_result: dict = {}
 
     async def run(self, data: Any, **extra_kwargs) -> float:
@@ -122,12 +156,13 @@ class DshAgent(AgentBase):
         return await asyncio.to_thread(self._run_sync, data, base_url, api_key)
 
     def _run_sync(self, data: Any, base_url: str, api_key: str) -> float:
+        self.last_result = {}
         try:
             from deepseek_harness import DeepSeekHarness
         except ImportError as exc:
             raise ImportError(
                 "deepseek-harness-sdk is not installed. "
-                "Install deepseek_harness and the matching deepseek-harness-runtime-bin "
+                "Install deepseek_harness and matching deepseek-harness-runtime-bin "
                 "from the same deepseek-ai/deepseek-harness revision."
             ) from exc
 
@@ -141,12 +176,19 @@ class DshAgent(AgentBase):
             workspace_cm = tempfile.TemporaryDirectory(prefix="nano-areal-task-")
             workspace = Path(workspace_cm.name)
         home_cm = tempfile.TemporaryDirectory(prefix="nano-areal-dsh-home-")
+        capture = None
+        home = home_cm.name
+        if self.session_log_dir:
+            capture = Path(self.session_log_dir).resolve() / uuid.uuid4().hex
+            capture.mkdir(parents=True)
+            home = str(capture / "dsh-home")
+        self.last_result = {"session_log_dir": str(capture) if capture else None}
         try:
             kwargs = build_dsh_kwargs(
                 base_url=base_url,
                 api_key=api_key,
                 cwd=str(workspace),
-                dsh_home=home_cm.name,
+                dsh_home=home,
                 model=self.model_name,
                 profile=self.profile,
                 provider=self.provider,
@@ -158,24 +200,60 @@ class DshAgent(AgentBase):
                 request_timeout_seconds=self.timeout_seconds,
             )
             with DeepSeekHarness(**kwargs) as harness:
-                result = harness.run(prompt)
+                result = run_with_deadline(harness, prompt, self.timeout_seconds)
+            if capture:
+                (capture / "events.json").write_text(
+                    json.dumps(result.events, indent=2) + "\n"
+                )
             hidden_dir = data.get("hidden_test_dir") if isinstance(data, dict) else None
             if hidden_dir:
-                from nano_areal.reward.dsh_task import external_test_pass_rate
+                from nano_areal.reward.dsh_task import external_test_report
 
-                verified = external_test_pass_rate(
-                    workspace, Path(hidden_dir), result.final_response,
+                verification = external_test_report(
+                    workspace,
+                    Path(hidden_dir),
+                    result.final_response,
+                    runner=data.get("hidden_test_runner", "script"),
                 )
+                verified = verification["pass_rate"]
+                self.last_result["verification"] = verification
             else:
                 preset = data.get("reward") if isinstance(data, dict) else None
-                verified = float(preset) if preset is not None else hidden_test_pass_rate(Path(kwargs["cwd"]))
-            self.last_result = {
-                "finish_reason": result.finish_reason,
-                "verified_reward": verified,
-                "response": result.final_response,
-            }
+                verified = (
+                    float(preset)
+                    if preset is not None
+                    else hidden_test_pass_rate(Path(kwargs["cwd"]))
+                )
+            self.last_result.update(
+                {
+                    "session_id": result.session_id,
+                    "finish_reason": result.finish_reason,
+                    "verified_reward": verified,
+                    "response": result.final_response,
+                    "status": result.finish_reason or "missing-finish-reason",
+                    "terminal_reasons": [
+                        event["data"].get("reason") for event in result.events
+                        if event.get("type") == "turn/end"
+                    ],
+                }
+            )
             return episode_reward(result.finish_reason, verified)
+        except Exception as error:
+            self.last_result.update(
+                {
+                    "status": "timeout"
+                    if "timeout" in type(error).__name__.lower()
+                    else "error",
+                    "error_type": type(error).__name__,
+                    "error": str(error).replace(api_key, "[REDACTED]"),
+                }
+            )
+            raise
         finally:
+            if capture:
+                (capture / "result.json").write_text(
+                    json.dumps(self.last_result, indent=2) + "\n"
+                )
             home_cm.cleanup()
             if workspace_cm is not None:
                 workspace_cm.cleanup()

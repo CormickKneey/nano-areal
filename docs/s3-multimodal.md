@@ -148,7 +148,11 @@ PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py --proxy-image \
   --output artifacts/s3/vllm-image-proxy.json
 ```
 
-## S4 next command: one real tool task, not training
+## Historical S4 no-tool smoke (superseded)
+
+The current implementation, actual HumanEval task attempts, durable session
+capture, deadline correction, and accounting failures are documented in
+[S4 foundations](s4-foundations.md). Both S3 and S4 remain unaccepted.
 
 No multi-hour S4 run was started. Because S3 is hard-blocked and documented,
 the foundations smoke was run without starting RL training. A local nano-swe
@@ -204,7 +208,7 @@ This is only a foundation smoke, not S4 acceptance. Before claiming S4,
 persist/reconcile dsh session logs against each proxy interaction, require
 real tool calls and multiple turns, classify timeouts/failures, count
 task/test denominators, and run the actual nano-swe hidden suite. The current
-agent deletes temporary dsh homes, so session-log capture still needs
-implementation. Withheld host-side tests are not an OS sandbox. Production
+agent deleted temporary dsh homes at that milestone; opt-in capture is now
+implemented in the S4 follow-up. Withheld host-side tests are not an OS sandbox. Production
 adapter/version synchronization for training also remains unverified; do not
 substitute the completed digit bandit for these gates.

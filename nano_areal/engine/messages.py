@@ -108,6 +108,8 @@ def anthropic_request_to_openai(body: dict) -> dict:
             item: dict = {"role": "assistant", "content": "".join(text_parts)}
             if tool_calls:
                 item["tool_calls"] = tool_calls
+                if not text_parts:
+                    item["content"] = []
             messages.append(item)
         else:
             if content_parts:

@@ -72,6 +72,8 @@ GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0= \
   --host 127.0.0.1 --port 8000 --max-model-len 8192 --max-num-seqs 1 \
   --gpu-memory-utilization 0.25 --enable-auto-tool-choice \
   --tool-call-parser hermes
+# The historical no-tool measurement used qwen3_xml; S3 later identified
+# this checkpoint's JSON tool grammar and corrected the command to hermes.
 # In another terminal, with the same cache environment:
 PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py \
   --server-pid ENGINE_PID

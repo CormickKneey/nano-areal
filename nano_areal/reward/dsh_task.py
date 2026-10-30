@@ -20,6 +20,16 @@ def external_test_pass_rate(
     response: str,
     timeout_s: float = 30.0,
 ) -> float:
+    return external_test_report(workspace, test_dir, response, timeout_s)["pass_rate"]
+
+
+def external_test_report(
+    workspace: Path,
+    test_dir: Path,
+    response: str,
+    timeout_s: float = 30.0,
+    runner: str = "script",
+) -> dict:
     """Run trusted tests outside the agent workspace, only after dsh exits."""
     workspace = workspace.resolve()
     test_dir = test_dir.resolve()
@@ -28,6 +38,8 @@ def external_test_pass_rate(
     tests = sorted(test_dir.glob("test_*.py"))
     if not tests:
         raise ValueError("No external hidden tests found")
+    if runner not in {"script", "pytest"}:
+        raise ValueError("Hidden test runner must be script or pytest")
     with tempfile.TemporaryDirectory(prefix="nano-areal-verifier-") as directory:
         response_path = Path(directory) / "response.txt"
         response_path.write_text(response)
@@ -36,21 +48,47 @@ def external_test_pass_rate(
             "TASK_WORKSPACE": str(workspace),
             "TASK_RESPONSE_PATH": str(response_path),
         }
-        passed = 0
+        outcomes = []
         for test in tests:
             try:
                 result = subprocess.run(
-                    [sys.executable, str(test)],
+                    (
+                        [sys.executable, "-m", "pytest", "-q", str(test)]
+                        if runner == "pytest"
+                        else [sys.executable, str(test)]
+                    ),
                     cwd=workspace,
                     env=environment,
                     capture_output=True,
                     timeout=timeout_s,
                     check=False,
                 )
-                passed += result.returncode == 0
+                outcomes.append(
+                    {
+                        "test": test.name,
+                        "status": (
+                            "passed"
+                            if result.returncode == 0
+                            else "collection-error"
+                            if runner == "pytest" and result.returncode == 2
+                            else "failed"
+                        ),
+                        "returncode": result.returncode,
+                        "stdout": result.stdout.decode(errors="replace"),
+                        "stderr": result.stderr.decode(errors="replace"),
+                    }
+                )
             except subprocess.TimeoutExpired:
-                continue
-        return passed / len(tests)
+                outcomes.append({"test": test.name, "status": "timeout"})
+        passed = sum(item["status"] == "passed" for item in outcomes)
+        return {
+            "passed": passed,
+            "total": len(tests),
+            "unit": "test_file",
+            "runner": runner,
+            "pass_rate": passed / len(tests),
+            "outcomes": outcomes,
+        }
 
 
 def hidden_test_pass_rate(workspace: Path, timeout_s: float = 120.0) -> float | None:
