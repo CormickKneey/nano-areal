@@ -1,45 +1,116 @@
 Date: 2026-10-30 (Asia/Shanghai)
 Repository: /Volumes/workspace/github/nano-areal
 Branch: cursor/macos-qwen3vl-v02-plan-f4cf
-PR: #4 remains open; no merge or force-push.
+PR: #4 OPEN; same branch; no merge or force-push.
 
-Stage: S3 hard-blocked and documented; S4 foundations smoke started only.
+Stage: S1/S2 remain accepted. S3 remains blocked. S4 foundations implemented
+and exercised with real tools, but S4 remains unaccepted. No RL was started.
 
-S3 measured:
-- Downloaded repository-local .s1-cache/datasets/clevr_count_70k_probe/test.parquet
-  from the plan-allowed BUAADreamer/clevr_count_70k subset (54 MiB, 200 real
-  PNG/question/answer rows).
-- Added --format clevr-count-parquet to scripts/train_clevr_l0.py and loader.
-- Real MPS native LoRA loss probe passed: 1 sample, 5 steps, max-context 1024;
-  loss_before=5.563095442084887e-07,
-  loss_after=3.973642748178463e-08 (92.86% decrease). Evidence:
-  artifacts/s3/clevr-count-loss.json and .log.
-- Stopped resident inference before the probe. Sampled swap was 3330 MiB used;
-  no pressure-free co-residency claim is made.
-- Real production vllm-metal BFCL replay against the offline two-turn ls
-  fixture failed honestly: rewards 0/2 because both completions asked for a
-  path and emitted no tool call. Evidence: artifacts/s3/bfcl-model.json/.log.
-  Therefore S3 is not accepted; model-backed BFCL remains the blocker.
+Milestone commits:
+- 0b45678 fix(s3): match Qwen VL tool parser grammar
+- a2fbc5e feat(s4): persist and audit bounded dsh episodes
+- The subsequent docs commit refreshes this handoff; use git log -3 --oneline.
 
-S4 smoke:
-- Provisioned .s1-cache/nano-swe/task and trusted hidden tests outside it at
-  .s1-cache/nano-swe-hidden-tests.
-- Started production vllm-metal with S1 parser flags and ran one real dsh
-  episode through OpenAIProxyWorkflow. It completed 1 model call with
-  577 prompt / 69 output tokens, no tool call, and hidden reward 0.0.
-  Evidence: artifacts/s3/s4-one-episode.json/.log.
-- Session-log capture/reconciliation is not implemented; DshAgent deletes its
-  temporary dsh_home. S4 is not accepted. Server was stopped after smoke.
+S3 real attempt:
+- The checkpoint chat template requires JSON inside <tool_call> tags, not
+  qwen3_xml's function/parameter XML. Production must use --tool-call-parser
+  hermes. An explicit-path diagnostic returned empty parsed responses under
+  qwen3_xml and parsed ls(path=".") on both turns under hermes.
+- Replayed the unchanged BFCLAgent fixture with temperature 0, top-p 0.95,
+  max output 128 and automatic tool choice: exact List files / Again stays
+  0/2 under both parsers, asking for a path. The explicit-path diagnostic is
+  2/2 under hermes; it is not a substitute for the unchanged comparison.
+- Evidence: artifacts/s3/bfcl-qwen3-xml.json, bfcl-hermes.json and
+  bfcl-hermes-final.json. Reproducer: scripts/probe_bfcl_tools.py.
+- Previous measured CLEVR-count loss-drop gate is unchanged. S3 is NOT green.
+
+S4 implementation:
+- Opt-in retained dsh homes/session.v4.jsonl, SDK events and result.json;
+  persistence covers success/error/timeout. Smoke always enables capture.
+- Fixed the tool-only Messages history shape to content=[] instead of "".
+  The latter caused backend multimodal normalization to add a newline before
+  a tool call and fail strict local/backend prompt-ID comparison on turn 2.
+  No token-ID or logprob check was weakened.
+- Added strict delivered-message input/output/total token reconciliation,
+  tool IDs/names/arguments, execution/results, exact result-text replay,
+  backend attempts/usages and exported trajectory counts/token counts.
+- SDK request_timeout_seconds does NOT bound its notification/idle wait.
+  Added a joined watchdog that closes the owned runtime at the activity
+  deadline and classifies TimeoutError. SDK initialization and bounded
+  shutdown are separate from that activity budget.
+- Added explicit external pytest runner. The old script runner imported
+  test definitions without executing them; nano-swe now actually runs them.
+  Denominator unit is test_file, with collection errors, failures, timeouts,
+  return codes and verifier output retained. Legacy script mode is preserved.
+- Added a local HumanEval-to-nano-swe builder. Original problem prompts go
+  into task READMEs; official check(candidate) functions stay outside all task
+  workspaces. Canonical solutions are never supplied. Fresh workspaces and
+  source SHA/task provenance are recorded. This is not an OS sandbox.
+- Final smoke drains/cancels in-flight backend requests before another
+  episode to prevent cross-episode accounting contamination.
+
+Measured outcomes (do NOT collapse these into a success claim):
+- Handwritten add control: 2/2 episodes passed with 5/4 model interactions,
+  4/3 tool-producing turns, exact delivered dsh/proxy accounting and external
+  pytest score 1/1 test file each. artifacts/s4/reconciled/report.json.
+- Official HumanEval/0: initial two attempts failed; deterministic diagnostic
+  started two more (first max-tokens, second externally interrupted while
+  discovering the SDK deadline gap); bounded two attempts both timed out.
+- Official HumanEval/53: final two attempts both hit 35-second deadlines.
+  Durable logs show 16/7 delivered assistant messages and 18/14 actual tool
+  executions/results. Proxy has 17/8 completed interactions: one extra
+  response per episode completed after dsh stopped. Strict accounting rejects
+  both. Planned test-file denominator 2, passed 0; verifier was not reached.
+- Across actual official-task explorations: 0/8 started episodes pass,
+  including one interrupted attempt with incomplete proxy accounting; 0/2
+  distinct task groups solved. Changing prompts/budgets and selected tasks
+  make this an engineering diagnostic, NOT a representative HumanEval score.
+- Full failure table, cancellation gaps and reproduce commands:
+  docs/s4-foundations.md. Evidence is ignored under artifacts/s4/.
+
+Reproduce (local caches only during inference/tests):
+  export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+  export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+  export XDG_CACHE_HOME="$PWD/.s1-cache/xdg"
+  mkdir -p "$TMPDIR" artifacts/s4
+  .venv/bin/python scripts/build_nano_swe.py \
+    --data-path .s1-cache/datasets/human-eval/HumanEval.jsonl.gz \
+    --task-id HumanEval/53
+
+  Start production in another terminal, then stop it after the smoke:
+  .s1-cache/venv-metal/bin/vllm serve \
+    "$PWD/.s1-cache/models/Qwen3-VL-4B-Instruct-4bit" \
+    --served-model-name mlx-community/Qwen3-VL-4B-Instruct-4bit \
+    --host 127.0.0.1 --port 8000 --max-model-len 8192 --max-num-seqs 1 \
+    --kv-cache-memory-bytes 1342177280 --enable-auto-tool-choice \
+    --tool-call-parser hermes
+
+  PYTHONPATH=. .venv/bin/python scripts/probe_bfcl_tools.py \
+    --parser hermes --output artifacts/s3/bfcl-hermes-final.json
+  PYTHONPATH=. .venv/bin/python scripts/probe_s4.py \
+    --task-manifest .s1-cache/nano-swe/human-eval-53/manifest.json \
+    --episodes 2 --timeout 35 --temperature 0 \
+    --output artifacts/s4/humaneval-53
+  Nonzero S4 exit is expected until every gate passes. Historical evidence
+  will be overwritten at the named report path; choose a new output directory
+  to retain another comparison. Unique raw session directories are retained.
 
 Validation:
-- PYTHONPATH=. .venv/bin/python -m pytest -q scripts/test_multimodal.py
-- .venv/bin/ruff check nano_areal/clevr.py scripts/train_clevr_l0.py
-- Full suite: 68 passed; final Ruff checks passed.
-- Milestone commit 576d9b7 was pushed to the existing PR branch.
+- PYTHONPATH=. .venv/bin/python -m pytest -q: 75 passed (4.41 seconds).
+- Targeted Ruff passes for agent/dsh.py, agent/dsh_audit.py, reward/dsh_task.py,
+  scripts/probe_s4.py, test_s4.py, build_nano_swe.py and probe_bfcl_tools.py.
+- git diff --check passes. Owned vllm-metal/dsh/proxy processes stopped;
+  ports 8000 and 8001 have no listener. No OrbStack/sudo/remount/password use.
 
-Next gaps:
-- Fix or qualify production model-backed BFCL tool behavior, rerun the exact
-  two-turn comparison, and only then reconsider S3 acceptance.
-- For S4, persist dsh session logs, reconcile every interaction/token count,
-  require multiple real tool turns, classify failures, and count test/task
-  denominators before any RL training.
+Remaining gates, in order:
+1. Resolve or formally revise the ambiguous unchanged BFCL comparison. Do not
+   treat explicit-path success as the original non-regression gate passing.
+2. Make actual nano-swe coding tasks finish and pass official hidden checks;
+   shell quoting/Python repair loops persist. Consider configured dsh file
+   write/edit tools without leaking solutions or tests to the agent.
+3. Complete cancellation/session ownership through proxy capture/export:
+   backend-only responses must remain explicitly classified, never trimmed
+   away to manufacture a token match or accepted as delivered trajectories.
+4. Repeat a fixed task group with unchanged conditions and all failures in
+   the denominator. Only then reconsider multi-step GRPO and production
+   adapter/version synchronization. No such training was started here.
