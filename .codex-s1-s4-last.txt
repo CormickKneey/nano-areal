@@ -34,7 +34,8 @@ S4 smoke:
 Validation:
 - PYTHONPATH=. .venv/bin/python -m pytest -q scripts/test_multimodal.py
 - .venv/bin/ruff check nano_areal/clevr.py scripts/train_clevr_l0.py
-- Full suite and commit/push remain to do after doc/status review.
+- Full suite: 68 passed; final Ruff checks passed.
+- Milestone commit 576d9b7 was pushed to the existing PR branch.
 
 Next gaps:
 - Fix or qualify production model-backed BFCL tool behavior, rerun the exact
