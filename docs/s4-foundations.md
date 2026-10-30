@@ -8,10 +8,24 @@ reconciliation and no truncation/timeout. The zero reward is a candidate
 syntax-error failure, not a broken official test helper. Both starts remain
 in the ledger: **36/81 successes, 45 failures retained**, including continue9's
 six starts. The declared /20 and /54 pairs do not start because the plan stops
-at the first informative group. Its own native **MAE <= 0.01** preflight must
-still qualify any bounded optimizer/export/feedback work. See
-[training evidence](s4-training.md); no full S4 acceptance follows from reward
-spread alone.
+at the first informative group. The exact whole group's native preflight
+passes the unchanged **MAE <= 0.01** at **0.007422680729897122**, all
+**9 turns / 1338 tokens**. A bounded
+attempt completes its first backward but exceeds the recommended MPS memory
+allocation limit in its second differentiable turn. **Updates remain 0**;
+there is no changed adapter, v1 feedback or complete optimizer/export memory
+qualification. Reporting fixes retain sampler/cleanup failures instead of
+mistaking stale statuses for successful updates. **156 tests pass.** See
+[training evidence](s4-training.md); the blocker moves from complete reward
+spread to gradient-history memory, not full S4 acceptance.
+
+The reporting-fixed final attempt records **status=error, updates=0** after
+**504.87 seconds**, including its own full numerical preflight. Sampled driver
+peak **26,803,388,416 bytes** exceeds the unchanged recommended budget
+**26,800,603,136 bytes**; the second gradient forward OOMs despite system swap
+decreasing **4836.38 -> 3969.81 MiB**. No optimizer/export memory or v1 feedback
+is measured. The final-probe original /0 confirmation still reproduces exactly
+**0.009696634512675821**. Owned production/native processes are stopped.
 
 Continue8 closes the original sampled /0 numerical gate in an explicit,
 source-bound native runtime: **0.00969663451268 MAE <= 0.01**, all **9 turns /

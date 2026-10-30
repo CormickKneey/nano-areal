@@ -21,6 +21,120 @@ stop before the new whole-group native preflight. Existing /0 and /53
 numerical evidence and the **0.01** threshold remain unchanged. An informative
 group alone does not qualify an optimizer step, changed adapter or full S4.
 
+### Native qualification and bounded update preparation
+
+The exact whole /10 group passes native preflight at **MAE
+0.007422680729897122 <= 0.01**, all **9 turns / 1338 tokens**, in
+**382.967845 seconds** (`policy-continue10-native-10/preflight.json`). It has
+nonzero episode advantages; no turn discount or proxy reward creates spread.
+
+An initial update invocation is interrupted during its preflight, before any
+backward, to configure a conservative MPS allocation limit. A second invocation
+fails allocator initialization: high watermark **1.0** conflicts with the
+default low watermark **1.4**. Its stderr and initial `started` report remain
+untouched; the old memory sampler raises on an empty trace and masks the
+primary failure, so that stale report is not a running or successful update.
+Both attempts have **0 optimizer steps**. The declared retry explicitly sets
+high **1.0**, low **0.9**, preserving the existing device-budget/no-swap gate.
+
+`305a1e4` fixes only probe failure reporting: empty/failed memory samples cannot
+hide the primary exception or qualify memory acceptance, observed partial
+peaks remain visible, and allocator environment settings are recorded. Four
+new regressions cover empty, valid, partially failed and primary-error report
+paths. **155 tests pass**, targeted Ruff and `git diff --check` pass. Native
+arithmetic, policy, checkpoints and rollout exports are unchanged.
+
+Because the probe source changes, a fresh source-bound original sampled /0
+confirmation runs before retrying /10. It reproduces exactly **MAE
+0.009696634512675821**, all **9 turns / 636 tokens**, in **186.278161 seconds**
+(`policy-continue10-confirmed-0/preflight.json`). Its numerical gate passes;
+the original homogeneous **[1,1] / [0,0]** rewards/advantages still block any
+update on that group. Historical reports are not overwritten.
+
+### Complete reward spread exposes a native memory boundary
+
+The first correctly configured bounded attempt rechecks all /10 turns at
+exactly **0.007422680729897122 MAE**, then completes its first forward and
+backward. The forward snapshot is **22,302,444,544 allocated /
+23,590,551,552 driver bytes**; after backward it is **17,992,641,024 allocated /
+23,609,425,920 driver bytes**. During the second differentiable turn, cached
+attention's `key.repeat_interleave` fails with MPS out-of-memory under the
+recommended-working-set allocation limit. There is **no optimizer step or
+export**. A subsequent weight-conversion OOM in `AlignedS4Runtime.close()`
+prevents the old finalizer from persisting the error and sampler peaks.
+Therefore `policy-continue10-update-bounded-10/update.json` has a **stale**
+`preflight-passed-no-update` status; its stderr
+`continue10-update-final-10.log` records both errors. It is not a successful
+update or a complete memory qualification.
+
+`eb0f7c9` guards cleanup failures, preserves the primary exception and records
+failure-time memory without allowing failed sampling to pass the memory gate.
+Five memory-reporting cases now pass; the full suite is **156 passing tests**
+in **11.89 seconds**, with targeted Ruff and `git diff --check` passing. This
+does not change native arithmetic, relax allocation/parity/reward thresholds,
+or fix the gradient-history memory demand itself. The retained-attempt ledger
+is `continue10-retained-update-failures.json`; original logs/reports stay
+untouched.
+
+The final-source /0 confirmation again reproduces exactly
+**0.009696634512675821**, all **9 turns / 636 tokens**, in **184.876783
+seconds** (`policy-continue10-final-0/preflight.json`). The fresh reporting-fixed
+attempt (`policy-continue10-update-final-10/update.json`) independently passes
+the whole /10 group at **0.007422680729897122**, then records **status=error,
+updates=0** after **504.870530 seconds** total. One forward/backward completes;
+the next differentiable forward fails allocating a cached-value concatenation.
+The original OOM and cleanup OOM are now both persisted, rather than leaving
+a stale success-like preflight status. No allocation limit is disabled.
+
+| Final bounded-attempt measurement | Bytes / result |
+| --- | ---: |
+| First gradient forward allocated / driver | 22,299,757,568 / 23,598,940,160 |
+| First completed backward allocated / driver | 17,992,641,024 / 23,609,425,920 |
+| 100ms sampled allocated peak | 26,227,601,408 |
+| 100ms sampled driver peak | 26,803,388,416 |
+| Recommended driver budget | 26,800,603,136 |
+| Process RSS high-water | 1,045,921,792 |
+| Valid memory samples | 4558 |
+| System swap used before / after | 4836.38 / 3969.81 MiB |
+| Memory gate | **failed** |
+| Optimizer / export memory | **not reached** |
+
+Swap decreases by **866.57 MiB**, but the driver peak exceeds the unchanged
+recommended budget and the gradient forward aborts. This is a measured failed
+bounded attempt, not full-checkpoint backward/optimizer/export qualification.
+There is no `adapter-v1` or `policy-v1.json`, no production-v1 rollout, and
+**full S4 training remains NOT accepted**. All owned serving/native processes
+are stopped; full model loads remain sequential.
+
+The next gate is memory-efficient complete-history differentiation, including
+retained per-token KV tensors and repeated history replay. Do not detach old
+KV gradients, disable memory limits, discard the failed episode or loosen
+**MAE <= 0.01**. After arithmetic/probe changes, requalify the original /0 and
+the exact informative /10 whole group before another bounded update, then
+require changed immutable v1, fresh production feedback and all memory gates.
+
+Reproduce with stopped production API/engine and a fresh output directory;
+never overwrite an existing update report or v1 adapter:
+
+```bash
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.0
+export PYTORCH_MPS_LOW_WATERMARK_RATIO=0.9
+OUT=artifacts/s4/policy-continue10-reproduce
+mkdir "$OUT"
+cp artifacts/s4/policy-aligned/policy-v0.json "$OUT/policy-v0.json"
+ln -s "$PWD/artifacts/s4/policy-aligned/adapter-v0" "$OUT/adapter-v0"
+.venv/bin/python scripts/probe_s4_training.py update \
+  --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+  --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+  --output "$OUT" --group artifacts/s4/policy-continue10-10 \
+  --aligned-arithmetic
+# The update rechecks this whole group's MAE before any backward/optimizer.
+# An update attempt or changed export alone does not accept full S4.
+```
+
 ## Continue9: declared sampling still has no informative complete group
 
 Continue9 declares and completes three additional two-episode groups with the
