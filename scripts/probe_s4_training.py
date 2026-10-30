@@ -67,16 +67,22 @@ def complete_group(directory, binding):
 class MemoryTrace:
     def __init__(self):
         self.samples = []
+        self.recommended_max_bytes = None
+        self.error = None
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self.sample, daemon=True)
 
     def sample(self):
-        while not self.stop_event.is_set():
-            self.samples.append({
-                "mps_allocated_bytes": torch.mps.current_allocated_memory(),
-                "mps_driver_bytes": torch.mps.driver_allocated_memory(),
-            })
-            self.stop_event.wait(0.1)
+        try:
+            self.recommended_max_bytes = torch.mps.recommended_max_memory()
+            while not self.stop_event.is_set():
+                self.samples.append({
+                    "mps_allocated_bytes": torch.mps.current_allocated_memory(),
+                    "mps_driver_bytes": torch.mps.driver_allocated_memory(),
+                })
+                self.stop_event.wait(0.1)
+        except Exception as error:
+            self.error = {"type": type(error).__name__, "message": str(error)}
 
     def finish(self):
         self.stop_event.set()
@@ -85,15 +91,17 @@ class MemoryTrace:
             "scope": "100ms sampled MPS peaks, not allocator-exact peaks",
             "samples": len(self.samples),
             "mps_allocated_peak_bytes": max(
-                row["mps_allocated_bytes"] for row in self.samples
+                (row["mps_allocated_bytes"] for row in self.samples), default=None,
             ),
             "mps_driver_peak_bytes": max(
-                row["mps_driver_bytes"] for row in self.samples
+                (row["mps_driver_bytes"] for row in self.samples), default=None,
             ),
             "process_rss_highwater_bytes": resource.getrusage(
                 resource.RUSAGE_SELF
             ).ru_maxrss,
-            "mps_recommended_max_bytes": torch.mps.recommended_max_memory(),
+            "mps_recommended_max_bytes": self.recommended_max_bytes,
+            "sampling_valid": bool(self.samples) and self.error is None,
+            "sampler_error": self.error,
         }
 
 
@@ -145,6 +153,12 @@ def main():
         "scope": "S4 native / production training preflight",
         "memory_before": memory_snapshot(os.getpid()),
         "memory_pressure_before": command_output(["memory_pressure", "-Q"]),
+        "mps_allocator_environment": {
+            name: os.environ.get(name) for name in (
+                "PYTORCH_MPS_HIGH_WATERMARK_RATIO",
+                "PYTORCH_MPS_LOW_WATERMARK_RATIO",
+            )
+        },
         "updates": 0, "elapsed_seconds": 0,
     }
     started = time.monotonic()
@@ -358,7 +372,8 @@ def main():
                     "swap_growth_mib": swap_used_mib(report["memory_after"])
                     - swap_used_mib(report["memory_before"]),
                     "driver_within_recommended_budget": (
-                        report["memory_trace"]["mps_driver_peak_bytes"]
+                        report["memory_trace"]["sampling_valid"]
+                        and report["memory_trace"]["mps_driver_peak_bytes"]
                         <= report["memory_trace"]["mps_recommended_max_bytes"]
                     ),
                 }
