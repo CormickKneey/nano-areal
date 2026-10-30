@@ -1,5 +1,29 @@
 # S4 production policy preflight: October 30, 2026
 
+## Continue9: declared sampling still has no informative complete group
+
+Continue9 declares and completes three additional two-episode groups with the
+unchanged generic tool instruction and official external pytest rewards. The
+new groups add **6/6** engineering starts, taking cumulative declared sampling
+to **35/79 successes and 44 failures retained**. This is engineering sampling,
+not HumanEval accuracy or pass@k.
+
+| Output | Task | Rewards | Eligibility | Outcome |
+| --- | --- | --- | ---: | --- |
+| `policy-continue9-38` | HumanEval/38 | `[0,0]` | 2/2 | Complete homogeneous failures |
+| `policy-continue9-109` | HumanEval/109 | `[0,1]` | 1/2 | One activity-timeout failure, one complete success |
+| `policy-continue9-0` | HumanEval/0 | `[1,1]` | 2/2 | Complete homogeneous successes |
+
+The /38 failures are retained as external pytest results; its official test
+file raises `NameError` for the provided `encode_cyclic` helper while checking
+`decode_cyclic`, so the group cannot be used as an informative reward group.
+The /109 timeout is ineligible, and the /0 pair has zero advantages. No
+episode subset, pooled task, proxy reward, or turn discount is used. Therefore
+no newly sampled group qualifies the native Gate-1 replay, **updates remain 0**,
+and no optimizer, adapter export, v1 feedback, or backward/optimizer/export
+memory measurement is claimed. The production server was stopped before any
+native consideration; no serving/native co-residency occurred.
+
 ## Continue8: bound native parity passes; complete reward spread still blocked
 
 The explicit native arithmetic runtime passes the original COMPLETE sampled
