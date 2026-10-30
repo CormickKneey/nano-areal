@@ -21,6 +21,7 @@ class AuditProxy(OpenAIProxyServer):
         self.backend_audit = []
         self.failures = []
         self.pending = set()
+        self.request_audit = []
 
     async def start(self):
         await super().start()
@@ -33,7 +34,7 @@ class AuditProxy(OpenAIProxyServer):
             self.pending.add(task)
             try:
                 response = await create(**request)
-            except Exception as error:
+            except (Exception, asyncio.CancelledError) as error:
                 entry["error_type"] = type(error).__name__
                 raise
             finally:
@@ -42,6 +43,10 @@ class AuditProxy(OpenAIProxyServer):
             return response
 
         self._vllm.chat.completions.create = capture
+
+    async def _dispatch_completion(self, body, session, return_payload=False):
+        self.request_audit = session.requests
+        return await super()._dispatch_completion(body, session, return_payload)
 
     async def _handle_chat_completion(self, body, session, return_payload=False):
         body = {**body, "temperature": self.temperature}
@@ -92,7 +97,8 @@ async def probe(args):
     report = {
         "scope": "local synthetic nano-swe foundation; not benchmark accuracy",
         "task_groups": 1,
-        "attempted": args.episodes,
+        "planned": args.episodes,
+        "attempted": 0,
         "episodes": [],
         "temperature": args.temperature,
     }
@@ -100,6 +106,7 @@ async def probe(args):
         report["scope"] = "HumanEval-derived nano-swe foundation, one task group"
         report["task"] = manifest
     await proxy.start()
+    interrupted = False
     try:
         for index in range(args.episodes):
             root.mkdir(parents=True, exist_ok=True)
@@ -120,7 +127,13 @@ async def probe(args):
             proxy.audit = []
             proxy.failures = []
             proxy.backend_audit = []
+            proxy.request_audit = []
             row = {"index": index, "workspace": str(workspace)}
+            report["attempted"] += 1
+            report["episodes"].append(row)
+            (args.output / "report.json").write_text(
+                json.dumps(report, indent=2) + "\n"
+            )
             try:
                 trajectories = await OpenAIProxyWorkflow(agent, proxy).arun_episode(
                     {
@@ -128,13 +141,13 @@ async def probe(args):
                         "hidden_test_dir": str(hidden),
                         "hidden_test_runner": "pytest",
                         "prompt": (
-                            "Work in the current directory using actual bash "
-                            "tool calls. First run pwd and cat README.md. "
+                            "Work in the current directory using actual "
+                            "tool calls. First read README.md with the read tool. "
                             "After reading the result, "
-                            "use a second bash call to implement the README interface "
+                            "use the write tool to implement the README interface "
                             "in solution.py. "
-                            "Use a heredoc or printf to preserve Python newlines, "
-                            "not echo. "
+                            "Use structured file tools rather than shell quoting "
+                            "to write Python source. "
                             "After that result, use a third bash call to run "
                             "a quick local Python check of the implemented function. "
                             "Do not merely suggest commands or ask for a path."
@@ -146,8 +159,9 @@ async def probe(args):
                     [len(item.input_ids) - int(item.response_mask.sum()),
                      int(item.response_mask.sum())] for item in trajectories
                 ]
-            except Exception as error:
+            except (Exception, asyncio.CancelledError) as error:
                 row["error_type"] = type(error).__name__
+                interrupted = isinstance(error, asyncio.CancelledError)
             if proxy.pending:
                 _, pending = await asyncio.wait(tuple(proxy.pending), timeout=30)
                 for task in pending:
@@ -175,13 +189,24 @@ async def probe(args):
             attempts = sum(event.get("type") == "assistant/attempt" for event in events)
             row["failed_dsh_attempts"] = attempts
             row["backend_requests"] = len(proxy.backend_audit)
+            row["request_audit"] = proxy.request_audit
+            row["cancelled_requests"] = sum(
+                entry["status"] == "cancelled" for entry in proxy.request_audit
+            )
+            row["backend_only_responses"] = max(
+                0, len(proxy.audit) - row["reconciliation"]["dsh_interactions"]
+            )
             row["backend_tokens"] = [
                 entry["response"].get("usage") if entry["response"] else None
                 for entry in proxy.backend_audit
             ]
-            request_count = len(proxy.audit) + len(proxy.failures)
-            if (attempts != len(proxy.failures)
-                    or len(proxy.backend_audit) != request_count):
+            request_count = (len(proxy.audit) + len(proxy.failures)
+                             + row["cancelled_requests"])
+            if (attempts != len(proxy.failures) + row["cancelled_requests"]
+                    or len(proxy.backend_audit) != request_count
+                    or len(proxy.request_audit) != request_count
+                    or any(entry["status"] == "pending"
+                           for entry in proxy.request_audit)):
                 row["reconciliation"]["matched"] = False
                 row["reconciliation"]["errors"].append("Request attempt count mismatch")
             (capture / "backend.json").write_text(
@@ -214,23 +239,27 @@ async def probe(args):
                 if tool_turns < 2
                 else "verification-failed"
             )
-            report["episodes"].append(row)
             (args.output / "report.json").write_text(
                 json.dumps(report, indent=2) + "\n"
             )
+            if interrupted:
+                break
     finally:
         await proxy.stop()
     report["passed"] = sum(row["passed"] for row in report["episodes"])
-    report["pass_rate"] = report["passed"] / args.episodes
+    report["pass_rate"] = report["passed"] / report["attempted"]
     report["task_groups_passed"] = int(report["passed"] == args.episodes)
     report["test_files_planned"] = len(list(hidden.glob("test_*.py"))) * args.episodes
+    report["test_files_started_episode_budget"] = (
+        len(list(hidden.glob("test_*.py"))) * report["attempted"]
+    )
     report["test_files_passed"] = sum(
         row["result"].get("verification", {}).get("passed", 0)
         for row in report["episodes"]
     )
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
-    return 0 if report["passed"] == args.episodes else 2
+    return 130 if interrupted else 0 if report["passed"] == args.episodes else 2
 
 
 if __name__ == "__main__":

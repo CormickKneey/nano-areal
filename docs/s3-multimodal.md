@@ -145,7 +145,7 @@ PYTHONPATH=. .venv/bin/python scripts/train_clevr_l0.py \
 Run this **without a resident inference server** first. The smallest real
 probe command above is the one used for the measured result.
 
-## BFCL model-backed gate
+## Historical BFCL model-backed failure
 
 The offline two-turn `ls` fixture still passes with its fake provider, but the
 same two-turn fixture was sent to the production vllm-metal completion path.
@@ -160,8 +160,9 @@ logged probe: vllm-metal server with `--enable-auto-tool-choice
 --tool-call-parser qwen3_xml`, one `ls(path)` tool, user turns `List files`
 and `Again`, `temperature=0`, and `max_tokens=128`.
 
-S3 therefore remains hard-blocked on model-backed BFCL behavior. The CLEVR
-gate is green; fake-provider BFCL tests do not replace this failure.
+At that milestone S3 was hard-blocked on model-backed BFCL behavior. The
+current successful unchanged comparison is documented at the top; fake-provider
+BFCL tests and explicit-path diagnostics did not replace that requirement.
 
 To reproduce production image transport, launch the S1 server with
 `--kv-cache-memory-bytes 1342177280` in place of
@@ -176,9 +177,10 @@ PYTHONPATH=. .venv/bin/python scripts/probe_vllm_http.py --proxy-image \
 
 The current implementation, actual HumanEval task attempts, durable session
 capture, deadline correction, and accounting failures are documented in
-[S4 foundations](s4-foundations.md). Both S3 and S4 remain unaccepted.
+[S4 foundations](s4-foundations.md). The current bounded coding gate passes;
+full S4 training remains unaccepted.
 
-No multi-hour S4 run was started. Because S3 is hard-blocked and documented,
+No multi-hour S4 run was started. While S3 was still hard-blocked,
 the foundations smoke was run without starting RL training. A local nano-swe
 task checkout, its prompt, and a trusted hidden-test directory **outside** the
 checkout were provisioned. Start the production server with the S1 tool-parser

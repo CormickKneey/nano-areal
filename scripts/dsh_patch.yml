@@ -1,3 +1,12 @@
-- select: llm-deepseek
+- id: llm-deepseek
   config:
     baseURL: !!js process.env.DEEPSEEK_BASE_URL
+    apiKeyEnv: DEEPSEEK_API_KEY
+    defaultContextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW ?? 8192)
+    streamIdleTimeoutMs: 172800000
+- id: tool-fs
+  config:
+    read: true
+    readImage: true
+    write: true
+    edit: true

@@ -27,6 +27,7 @@ import asyncio
 import math
 import secrets
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +54,8 @@ class ProxySession:
     interactions: dict[str, InteractionRecord] = field(default_factory=dict)
     _last_id: str | None = field(default=None, repr=False)
     active: bool = True
+    pending: set[asyncio.Task] = field(default_factory=set, repr=False)
+    requests: list[dict] = field(default_factory=list)
 
     def last_interaction(self) -> InteractionRecord | None:
         return self.interactions.get(self._last_id) if self._last_id else None
@@ -121,20 +124,31 @@ class OpenAIProxyServer:
             log_level="warning",
         )
         server = uvicorn.Server(config)
+        server.capture_signals = nullcontext
         self._server = server
         self._server_task = asyncio.create_task(server.serve())
         # Give the server a moment to bind
         await asyncio.sleep(0.5)
 
     async def stop(self):
+        for session in tuple(self._sessions.values()):
+            await self._close_session(session)
         if self._server_task:
             self._server.should_exit = True
             try:
                 await asyncio.wait_for(self._server_task, timeout=10.0)
             except asyncio.TimeoutError:
                 self._server_task.cancel()
+                await asyncio.gather(self._server_task, return_exceptions=True)
         if self._vllm:
             await self._vllm.close()
+
+    async def _close_session(self, session: ProxySession):
+        session.active = False
+        pending = tuple(session.pending)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
     @property
     def base_url(self) -> str:
@@ -221,7 +235,7 @@ class OpenAIProxyServer:
         ):
             session = self._require_session(authorization, x_api_key)
             body = await request.json()
-            return await self._handle_chat_completion(body, session)
+            return await self._dispatch_completion(body, session)
 
         @app.post("/v1/messages")
         async def messages(
@@ -236,7 +250,9 @@ class OpenAIProxyServer:
                 openai_body = anthropic_request_to_openai(body)
             except ValueError as error:
                 raise HTTPException(422, str(error)) from error
-            payload = await self._handle_chat_completion(openai_body, session, return_payload=True)
+            payload = await self._dispatch_completion(
+                openai_body, session, return_payload=True
+            )
             sse = openai_completion_to_messages_sse(payload)
             return StreamingResponse(iter([sse]), media_type="text/event-stream")
 
@@ -257,8 +273,8 @@ class OpenAIProxyServer:
         @app.post("/rl/end_session")
         async def end_session(authorization: str | None = Header(default=None)):
             session = self._require_session(authorization)
-            session.active = False
-            return {"ok": True}
+            await self._close_session(session)
+            return {"ok": True, "requests": session.requests}
 
         @app.post("/export_trajectories")
         async def export_trajectories(
@@ -273,8 +289,14 @@ class OpenAIProxyServer:
             session = self._sessions.get(session_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
+            if session.active or session.pending:
+                raise HTTPException(
+                    409, "End the session before exporting trajectories"
+                )
 
-            tensors = _build_trajectories(session, discount)
+            tensors = [] if body.get("discard", False) else _build_trajectories(
+                session, discount
+            )
             # Serialize tensors to lists for JSON transport
             result = [
                 {
@@ -300,6 +322,28 @@ class OpenAIProxyServer:
     # ------------------------------------------------------------------
     # Core: intercept, tokenize, forward, capture
     # ------------------------------------------------------------------
+
+    async def _dispatch_completion(
+        self, body: dict, session: ProxySession, return_payload: bool = False,
+    ):
+        if not session.active:
+            raise HTTPException(401, "Session has ended")
+        task = asyncio.current_task()
+        entry = {"session_id": session.session_id, "status": "pending"}
+        session.requests.append(entry)
+        session.pending.add(task)
+        try:
+            result = await self._handle_chat_completion(body, session, return_payload)
+            entry.update(status="response-ready", response_id=session._last_id)
+            return result
+        except asyncio.CancelledError:
+            entry["status"] = "cancelled"
+            raise
+        except Exception as error:
+            entry.update(status="failed", error_type=type(error).__name__)
+            raise
+        finally:
+            session.pending.discard(task)
 
     async def _handle_chat_completion(
         self,
@@ -503,6 +547,7 @@ class OpenAIProxyClient:
     def __init__(self, proxy_base_url: str):
         self.proxy_base_url = proxy_base_url
         self.session_id: str | None = None
+        self.request_audit: list[dict] = []
         self.api_key: str | None = None
         self.trajectories: list[TrajectoryTensors] = []
         self._http: httpx.AsyncClient | None = None
@@ -534,10 +579,14 @@ class OpenAIProxyClient:
                     headers={"Authorization": f"Bearer {self.api_key}"},
                 )
                 ended.raise_for_status()
+                self.request_audit = ended.json().get("requests", [])
                 r = await self._http.post(
                     "/export_trajectories",
                     headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"session_id": self.session_id, "discount": self._discount},
+                    json={
+                        "session_id": self.session_id, "discount": self._discount,
+                        "discard": bool(args and args[0] is not None),
+                    },
                 )
                 r.raise_for_status()
                 import torch

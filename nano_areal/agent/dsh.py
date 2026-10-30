@@ -18,6 +18,7 @@ Verified against deepseek-ai/deepseek-harness master (SDK README +
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import tempfile
 import threading
@@ -73,9 +74,16 @@ def episode_reward(finish_reason: str | None, verified: float | None) -> float:
     return float(verified)
 
 
-def run_with_deadline(harness, prompt: str, timeout_seconds: float):
+def run_with_deadline(harness, prompt: str, timeout_seconds: float, cancelled=None):
     """Close the owned runtime at the activity deadline, then join the watchdog."""
     expired = threading.Event()
+    finished = threading.Event()
+
+    def watch_cancellation():
+        while not finished.wait(0.05):
+            if cancelled.is_set():
+                harness.close()
+                return
 
     def expire():
         expired.set()
@@ -84,19 +92,32 @@ def run_with_deadline(harness, prompt: str, timeout_seconds: float):
     timer = threading.Timer(timeout_seconds, expire)
     timer.daemon = True
     timer.start()
+    watcher = None
+    if cancelled is not None:
+        watcher = threading.Thread(target=watch_cancellation, daemon=True)
+        watcher.start()
     try:
         try:
             result = harness.run(prompt)
         except Exception as error:
+            if cancelled is not None and cancelled.is_set():
+                raise concurrent.futures.CancelledError(
+                    "dsh episode cancelled"
+                ) from error
             if expired.is_set():
                 raise TimeoutError("dsh episode activity deadline exceeded") from error
             raise
         if expired.is_set():
             raise TimeoutError("dsh episode activity deadline exceeded")
+        if cancelled is not None and cancelled.is_set():
+            raise concurrent.futures.CancelledError("dsh episode cancelled")
         return result
     finally:
         timer.cancel()
         timer.join()
+        finished.set()
+        if watcher:
+            watcher.join()
 
 
 def task_prompt(data: Any) -> str:
@@ -153,9 +174,35 @@ class DshAgent(AgentBase):
     async def run(self, data: Any, **extra_kwargs) -> float:
         base_url = extra_kwargs["base_url"]
         api_key = extra_kwargs["api_key"]
-        return await asyncio.to_thread(self._run_sync, data, base_url, api_key)
+        cancelled = threading.Event()
+        worker = asyncio.create_task(asyncio.to_thread(
+            self._run_sync, data, base_url, api_key, cancelled
+        ))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                if not worker.done():
+                    raise
+            except Exception:
+                pass
+            self.last_result.update(
+                status="cancelled", error_type="CancelledError",
+                error="dsh episode cancelled", verified_reward=0.0,
+            )
+            capture = self.last_result.get("session_log_dir")
+            if capture:
+                (Path(capture) / "result.json").write_text(
+                    json.dumps(self.last_result, indent=2) + "\n"
+                )
+            raise
 
-    def _run_sync(self, data: Any, base_url: str, api_key: str) -> float:
+    def _run_sync(
+        self, data: Any, base_url: str, api_key: str, cancelled=None,
+    ) -> float:
         self.last_result = {}
         try:
             from deepseek_harness import DeepSeekHarness
@@ -200,7 +247,9 @@ class DshAgent(AgentBase):
                 request_timeout_seconds=self.timeout_seconds,
             )
             with DeepSeekHarness(**kwargs) as harness:
-                result = run_with_deadline(harness, prompt, self.timeout_seconds)
+                result = run_with_deadline(
+                    harness, prompt, self.timeout_seconds, cancelled
+                )
             if capture:
                 (capture / "events.json").write_text(
                     json.dumps(result.events, indent=2) + "\n"
@@ -241,7 +290,9 @@ class DshAgent(AgentBase):
         except Exception as error:
             self.last_result.update(
                 {
-                    "status": "timeout"
+                    "status": "cancelled"
+                    if isinstance(error, concurrent.futures.CancelledError)
+                    else "timeout"
                     if "timeout" in type(error).__name__.lower()
                     else "error",
                     "error_type": type(error).__name__,

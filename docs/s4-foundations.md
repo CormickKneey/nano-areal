@@ -1,12 +1,96 @@
 # S4 dsh / nano-swe foundations: October 30, 2026
 
-## Status: implemented foundations, not accepted
+## Status: bounded coding gate passes; training remains unaccepted
 
-S3 remains blocked by the unchanged model-backed BFCL fixture. No GRPO,
-adapter update, or training run was started. This milestone implements and
-exercises durable capture, strict accounting, real tools, trusted verification,
-episode deadlines, and explicit denominators. Actual HumanEval-derived tasks
-still fail, and cancelled requests do not fully reconcile. S4 is **not green**.
+S3's unchanged BFCL fixture now passes 2/2 under production hermes; see
+`docs/s3-multimodal.md`. On the same production backend, the final fixed S4
+configuration solves **HumanEval/53 2/2 and HumanEval/0 2/2** with official
+external checks, real multi-turn tools, durable logs and exact accounting.
+No GRPO, adapter update, or training run was started. This accepts the bounded
+coding/session/hidden-check gate, not full S4 training or benchmark accuracy.
+
+### File tools and cancellation correction
+
+The prior patch used `select`, which this Loader silently skipped. Patches
+must target row `id`, and `config` replaces rather than deep-merges the row.
+`scripts/dsh_patch.yml` now restates the adapter settings and enables the
+installed `tool-fs` row's `read`, `write`, and `edit` tools. The generic task
+instruction reads README, writes solution.py with structured tools, and runs
+a local check using bash. Neither solutions nor official hidden checks are
+provided in that instruction. Successful sessions actually execute
+`read -> write -> bash -> final`, sometimes with an additional local check.
+
+Each proxy session now owns its pending requests and a request ledger.
+Ending a session marks it inactive, cancels and joins only its requests,
+and prevents export until it is ended and drained. Failed/cancelled episodes
+discard training export, not backend evidence. Backend responses, usages,
+proxy records and durable dsh logs remain independently retained. A
+`response-ready` ledger entry does **not** assert delivery to dsh. Completed
+backend-only responses are still rejected by strict delivered-message
+reconciliation; no response list is trimmed to manufacture agreement.
+
+Python task cancellation also closes and joins the owned SDK runtime before
+returning and persists a cancelled result. The embedded Uvicorn server no
+longer captures process signals: its previous SIGINT handler let the model
+continue and later interrupted shutdown instead of cancelling the episode.
+The corrected real Ctrl-C probe exits 130 with one started failed episode,
+one cancelled backend request, zero backend-only completions, and a complete
+report. The 2-second deadline probe similarly records a timeout plus one
+cancelled request. Both remain failed episodes: an unreplayed final tool
+result is rejected and no successful training export is claimed. Null usage
+on a cancelled backend request means unknown, never zero computed tokens.
+
+### Final fixed groups and full exploration denominator
+
+All rows use fresh workspaces. Final groups use temperature 0, 512 output
+tokens, a 120-second activity deadline, and the same generic task instruction.
+Each successful episode passes 1/1 external pytest test file containing the
+official `check(candidate)`, not merely local examples.
+
+| Final evidence under artifacts/s4 | Episodes passed | Model turns | Tool turns | Hidden test files passed |
+| --- | ---: | --- | --- | ---: |
+| accepted-53/report.json | 2/2 | 4, 4 | 3, 3 | 2/2 |
+| accepted-0/report.json | 2/2 | 5, 4 | 4, 3 | 2/2 |
+
+Every final episode exactly matches dsh input/output/total usage, tool calls,
+executions/results, result-text replay, backend attempts and exported token
+counts. No final episode has a failed request or backend-only response.
+
+Failures are not removed from the overall engineering denominator:
+
+| Evidence directory under artifacts/s4 | Started | Passed | Outcome |
+| --- | ---: | ---: | --- |
+| humaneval-smoke | 2 | 0 | Earlier accounting/verification failures |
+| humaneval-deterministic | 2 | 0 | Max-tokens and interrupted orphan session |
+| humaneval-bounded | 2 | 0 | Earlier timeouts |
+| humaneval-53 | 2 | 0 | Earlier timeouts/accounting failures |
+| file-tools-53 | 2 | 0 | Ignored select patch; max-tokens |
+| file-tools-fixed-53 | 2 | 2 | Correct id patch; successful tools/checks |
+| cancel-owned-53 | 1 | 0 | Deliberate deadline; initial cancellation audit |
+| owned-final-53 | 2 | 2 | Owned-request implementation replay |
+| owned-final-0 | 2 | 2 | Official nontrivial function task replay |
+| interrupted-owned-0 | 2 | 1 | First passed; SIGINT exposed Uvicorn ownership bug |
+| interrupted-fixed-0 | 1 | 0 | Deliberate Ctrl-C; classified, reaped and retained |
+| cancel-final-53 | 1 | 0 | Deliberate deadline; classified, reaped and retained |
+| accepted-53 | 2 | 2 | Final fixed group |
+| accepted-0 | 2 | 2 | Final fixed group |
+| **All started official-task episodes** | **25** | **11** | **14 failures retained** |
+
+The new run contributes 11/17; the previous handoff contributes 0/8. The
+earlier deterministic report has only one finished row, but two retained
+dsh homes prove two starts: the interrupted attempt is still counted.
+The first SIGINT diagnostic has two recorded rows but no final summary;
+its second row still counts as a failure. The corrected SIGINT run planned
+two episodes but started only one; its unstarted second episode is not a
+failure or a pass. Mixed prompts/configurations, repeated tasks and deliberate
+cancellation tests make 11/25 an exploration ledger, not HumanEval accuracy.
+
+Validation: **79 regression tests pass**, including asynchronous SDK
+cancellation, per-session request isolation, active-session export rejection,
+failed-episode discard without evidence deletion, embedded signal ownership,
+and existing S1/S2/S3 contracts. The targeted Ruff command below passes;
+unrelated pre-existing style violations in proxy.py are not swept into this
+change. Owned production inference is stopped after these measurements.
 
 ## Implemented contracts
 
@@ -28,7 +112,8 @@ still fail, and cancelled requests do not fully reconcile. S4 is **not green**.
   counts/token counts, all backend attempts/usages, and dsh failed attempts.
 - `probe_s4.py` retains backend responses (including native IDs/logprobs),
   proxy records, failed requests and original dsh logs. In-flight backend
-  requests are drained before the next episode, or cancelled after 30 seconds,
+  requests are cancelled and joined by their session before export; the smoke
+  also has a defensive 30-second drain before the next episode,
   so a previous episode cannot append into the next episode's accounting.
   A backend response completed after dsh has stopped is still recorded; it
   cannot be claimed as a matched dsh interaction.
@@ -63,7 +148,7 @@ Messages conversion now represents tool-only assistant content as `[]`.
 Production `/tokenize` and local template IDs matched exactly for that shape;
 the same comparison with `""` did not. Token-ID validation was **not relaxed**.
 
-## Measured outcomes, including failures
+## Historical outcomes before the file-tool correction
 
 Backend: official production vllm-metal HTTP, local 4-bit Qwen3-VL-4B,
 8192-token context, one sequence, 1,342,177,280-byte KV budget, `hermes`.
@@ -141,8 +226,16 @@ curl --fail --location \
 # In another terminal with the same environment:
 PYTHONPATH=. .venv/bin/python scripts/probe_s4.py \
   --task-manifest .s1-cache/nano-swe/human-eval-53/manifest.json \
-  --episodes 2 --timeout 35 --temperature 0 \
-  --output artifacts/s4/humaneval-53
+  --episodes 2 --timeout 120 --temperature 0 \
+  --output artifacts/s4/reproduce-53
+
+.venv/bin/python scripts/build_nano_swe.py \
+  --data-path .s1-cache/datasets/human-eval/HumanEval.jsonl.gz \
+  --task-id HumanEval/0
+PYTHONPATH=. .venv/bin/python scripts/probe_s4.py \
+  --task-manifest .s1-cache/nano-swe/human-eval-0/manifest.json \
+  --episodes 2 --timeout 120 --temperature 0 \
+  --output artifacts/s4/reproduce-0
 # Nonzero exit is expected unless every episode passes all gates.
 # Stop the owned production server after the probe (Ctrl-C in its terminal).
 
@@ -152,20 +245,19 @@ PYTHONPATH=. .venv/bin/python -m pytest -q
   scripts/build_nano_swe.py scripts/probe_bfcl_tools.py
 ```
 
-Validation: **75 regression tests pass**, including watchdog termination,
+Previous validation: **75 regression tests passed**, including watchdog termination,
 success/timeout persistence, argument/replay/count mismatch rejection,
 external pytest execution, verifier timeouts and source/test separation.
 The listed targeted Ruff command passes. Earlier failed logs remain local.
 
-## Next gates, in order
+## Remaining training gates
 
-1. S3: resolve or formally revise the ambiguous unchanged BFCL gate; the
-   explicit-path diagnostic cannot substitute for it.
-2. S4: make actual coding tasks finish reliably with real tools; consider
-   configured file-write/edit tools instead of fragile shell quoting, without
-   providing canonical solutions or exposing hidden tests.
-3. Make cancellation/session ownership explicit through proxy capture and
-   export. A completed backend-only response must be classified and retained,
-   not confused with a delivered dsh turn or a training trajectory.
-4. Repeat a fixed task group with unchanged prompts/budgets and all attempts
-   counted. Only reconsider multi-step GRPO after the above gates are real.
+The unchanged S3 gate, structured coding tools, fixed task-group checks and
+explicit cancellation ownership requested in this continuation are measured.
+No multi-hour GRPO is authorized or started by this result. Before claiming
+full S4 training acceptance, validate production adapter/version synchronization,
+bounded complete-group rollout/update/export behavior, memory budgets and
+policy provenance. The earlier quantized/bf16 logprob drift and unqualified
+8192-token co-residency limits remain; S1/S2 acceptance is not broadened here.
+Keep completed backend-only responses as explicit accounting failures, and
+include every future failed/interrupted start in the exploration denominator.
