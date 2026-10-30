@@ -3,17 +3,26 @@ Repository: /Volumes/workspace/github/nano-areal
 Branch: cursor/macos-qwen3vl-v02-plan-f4cf
 PR: #4 OPEN; same branch; no merge or force-push.
 
-Stage after continue5:
+Stage after continue6:
 - S1 production HTTP, S2 native parity, accepted S3 and bounded S4 coding
   gates remain unchanged. Full S4 training is NOT accepted.
 - Still at remaining gate 1: sampled numerical parity is not closed.
-- Isolated MLX decode bias-sum rounding is now reproduced and independently
-  checked in PyTorch, but eight whole-group counterfactuals still fail 0.01.
+- Production paged prefill/decode with 16-token prefix-cache reuse now
+  reproduces the untouched sampled /0 group twice: MAE 0.00000123694609,
+  max 0.00016190298. This is an unbound reference, NOT native acceptance.
+- Native cached comparisons still fail: dense 0.01101615323, corrected
+  output head 0.01087339527, fused RMS/SwiGLU + FP32 SDPA 0.01277691887.
+- No production/native default, trainer path, manifest or captured
+  probability was changed. The bound native preflight remains 0.01112227.
 - No new rollout starts. Cumulative declared sampling remains 24/49;
   all 25 failures retained. No informative COMPLETE group. Updates = 0.
 - No changed adapter, v1 feedback, backward/optimizer/export memory result.
 
 Milestones (committed/pushed to the same PR branch):
+- 1168cb6 feat(s4): replay production cache schedules
+  Read-only MLX/paged reference, opt-in native cached reference and prefix
+  accounting, bounded diagnostics, CPU cached/full score/gradient coverage.
+  Production and native loads remain sequential. No update acceptance.
 - e4c4952: previous residual-parity and complete-group handoff.
 - 9dd6b56: actual MLX affine 4-bit -> native HF-layout floating base alignment.
 - 51029c7: gated single episode-balanced optimizer step / immutable v1 export;
@@ -22,8 +31,41 @@ Milestones (committed/pushed to the same PR branch):
   Adds opt-in unbound diagnostics, a PyTorch affine decode reference, and
   independent synthetic MLX plus gradient checks. Does NOT change any
   production loader, native architecture default, trainer or policy manifest.
-- Branch HEAD's audit follow-up adds isolated float32 attention and refreshes
-  docs/handoff. Resolve its exact hash with git log -1 --oneline.
+- 6cf0f06: continue5 isolated float32 attention / residual audit handoff.
+- The latest handoff-only commit follows 1168cb6; resolve with git log -1.
+
+Continue6 findings (ignored artifacts/s4/policy-aligned-audit):
+- All complete diagnostics use the SAME untouched sampled HumanEval/0 group,
+  9 turns / 636 response tokens, rewards [1,1], advantages [0,0].
+- paged-replay.json: production paged kernels, fresh cache each turn,
+  single-row prefill/decode head, MAE 0.00995035268, 55.43s.
+- paged-prefix-replay.json: same kernels plus matching processed prefixes
+  rounded down to 16-token blocks, MAE 0.00000123694609, 26.13s.
+- paged-prefix-confirmation.json: identical MAE, max 0.00016190298, 27.12s.
+  Reused token counts [0,1168,1536,1616,1136,1168,1520,1648,1744].
+  Prefix state carries across turns AND episode boundaries in group order.
+  MLX 0.32.2 / MLX-VLM 0.7.6 / vllm-metal 0.32.0; installed extension,
+  metallibs, Metal kernels, wrapper sources and original evidence hashed.
+- mlx-cached-replay.json: ordinary MLX KVCache, fresh cache per turn,
+  MAE 0.01347209809, 53.73s. Standard MLX forward is not production parity.
+- native-cached-dense.json: native segmented prefill/decode + prefix reuse,
+  original dense projections/head, MAE 0.01101615323, 77.09s.
+- native-cached-head.json: same with single-row affine head correction,
+  MAE 0.01087339527, 221.82s.
+- native-cached-arithmetic.json: dense projections/head, fused RMS/SwiGLU,
+  FP32 SDPA, original RoPE, MAE 0.01277691887, 105.58s. Fails 0.01.
+- native-cached-fused.json: interrupted/retained (status=error,
+  error_type=KeyboardInterrupt), only 1/9 turns and 21/636 tokens completed.
+  Partial MAE 0.01597123034 is NOT a whole-group result; stored 65.53s is
+  last completed turn time, not total wall time to interruption. Do not use
+  the partial group for acceptance. No rollout start was added by this probe.
+- New native diagnostics limit forward execution to <=600 seconds, checking
+  between cached segments, and cache device copies of quantization tensors.
+- Base-only MLX replay rejects nonfinite/changed/nonzero-B adapters. These
+  diagnostics are not a way to ignore a changed v1 adapter.
+- 120 tests pass, including CPU cached/full scores AND adapter gradients,
+  block-offset causal masks, changed-prefix invalidation and deadline guards.
+  These are not measured MPS backward/optimizer/export memory results.
 
 Continue5 finding (ignored artifacts/s4/policy-aligned-audit):
 - affine-isolation.json: actual layer-0 q_proj (2560 -> 4096) and down_proj
@@ -86,6 +128,20 @@ Reproduce from repository root (new diagnostic output filenames only):
   export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
   export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
   # Keep owned production API AND engine stopped; sequential native only.
+  .s1-cache/venv-metal/bin/python scripts/diagnose_s4_replay.py \
+    --policy artifacts/s4/policy-aligned/policy-v0.json \
+    --group artifacts/s4/policy-sampled-0 --execution paged --prefix-reuse \
+    --output artifacts/s4/policy-aligned-audit/paged-prefix-reproduce.json
+  # Omit --prefix-reuse for fresh-cache paged execution; --execution cached
+  # uses ordinary MLX KVCache. All are teacher-forced diagnostics, not starts.
+  .venv/bin/python scripts/diagnose_s4_operators.py \
+    --policy artifacts/s4/policy-aligned/policy-v0.json \
+    --group artifacts/s4/policy-sampled-0 --cached-execution --prefix-reuse \
+    --dense-projections --dense-head \
+    --output artifacts/s4/policy-aligned-audit/native-cached-reproduce.json
+  # Head comparison: omit --dense-head. Arithmetic comparison: keep it and
+  # add --fused-rms --fused-swiglu --fp32-attention. Choose NEW outputs.
+  # Preserve the earlier whole-sequence operator diagnostic reproduction:
   .venv/bin/python scripts/diagnose_s4_operators.py \
     --policy artifacts/s4/policy-aligned/policy-v0.json \
     --group artifacts/s4/policy-sampled-0 --dense-projections --prefill-head \
@@ -100,15 +156,20 @@ Reproduce from repository root (new diagnostic output filenames only):
 
 Validation:
   PYTHONPATH=. .venv/bin/python -m pytest -q \
-    --basetemp=.s1-cache/tmp/pytest-continue5-final
-  # 108 passed. Targeted Ruff and git diff --check pass.
+    --basetemp=.s1-cache/tmp/pytest-continue6-final-reproduce
+  # 120 passed. Targeted Ruff and git diff --check pass.
   .venv/bin/ruff check nano_areal/archon/s4_operators.py \
-    scripts/diagnose_s4_operators.py scripts/test_s4_operators.py
+    nano_areal/archon/s4_replay.py scripts/diagnose_s4_replay.py \
+    scripts/diagnose_s4_operators.py scripts/test_s4_operators.py \
+    scripts/test_s4_replay.py
 
 Remaining gates, in order:
-1. Close sampled parity without loosening MAE <= 0.01. Model actual production
-   prefill/decode segmentation, cache reuse and attention arithmetic; isolated
-   affine correctness is not sufficient. Preserve original architecture
+1. Close NATIVE sampled parity without loosening MAE <= 0.01. The production
+   paged/prefix reference is now reproduced; use that schedule for layerwise
+   native-vs-production traces rather than treating ordinary MLX KVCache or
+   full-sequence row-splitting as the target. Inspect real prefill suffix
+   shapes, quantized dispatch, RoPE precision and attention accumulation.
+   Isolated affine correctness is not sufficient. Preserve architecture
    acceptance separately. Bind fresh policies before claiming changed-runtime
    rollout acceptance; counterfactuals are never relabeled as bound rollouts.
 2. Obtain genuinely informative COMPLETE declared groups with original external
