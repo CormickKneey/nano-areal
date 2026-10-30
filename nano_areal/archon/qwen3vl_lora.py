@@ -203,3 +203,37 @@ class NativeQwen3VLLoRATrainer(Qwen3VLLoRATrainer):
         from nano_areal.archon.qwen3vl import export_mlx_lora
 
         export_mlx_lora(self.model, path)
+
+    def export_peft_adapter(self, path: Path):
+        import json
+
+        from safetensors.torch import save_file
+
+        from nano_areal.archon.qwen3vl import LoRALinear
+
+        path.mkdir(parents=True, exist_ok=False)
+        weights = {}
+        ranks, alphas = set(), set()
+        for index, layer in enumerate(self.model.language_model.layers):
+            for projection in ("q_proj", "v_proj"):
+                module = getattr(layer.attn, projection)
+                if not isinstance(module, LoRALinear):
+                    raise ValueError("Expected native language-only LoRA")
+                rank = module.lora_a.shape[0]
+                ranks.add(rank)
+                alphas.add(module.scale * rank)
+                for side in ("a", "b"):
+                    key = (
+                        f"base_model.model.model.language_model.layers.{index}."
+                        f"self_attn.{projection}.lora_{side.upper()}.weight"
+                    )
+                    weights[key] = getattr(module, f"lora_{side}").detach().cpu()
+        if len(ranks) != 1 or len(alphas) != 1:
+            raise ValueError("PEFT export requires uniform LoRA rank and alpha")
+        save_file(weights, str(path / "adapter_model.safetensors"))
+        (path / "adapter_config.json").write_text(json.dumps({
+            "peft_type": "LORA", "task_type": "CAUSAL_LM", "bias": "none",
+            "r": ranks.pop(), "lora_alpha": alphas.pop(), "lora_dropout": 0.0,
+            "target_modules": ["q_proj", "v_proj"], "use_dora": False,
+            "use_rslora": False,
+        }, indent=2) + "\n")

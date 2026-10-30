@@ -5,7 +5,6 @@ Mirrors AReaL's InteractionWithTokenLogpReward.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import torch
 
@@ -46,6 +45,8 @@ class InteractionRecord:
     finish_reason: str | None = None
     pixel_values: torch.Tensor | None = None
     image_grid_thw: torch.Tensor | None = None
+    policy_model: str | None = None
+    policy_version: int | None = None
 
     def to_trajectory(self) -> "TrajectoryTensors":
         """Convert to tensor format for the trainer."""
@@ -76,6 +77,8 @@ class InteractionRecord:
             truncated=truncated,
             pixel_values=self.pixel_values,
             image_grid_thw=self.image_grid_thw,
+            policy_model=self.policy_model,
+            policy_version=self.policy_version,
         )
 
 
@@ -89,3 +92,5 @@ class TrajectoryTensors:
     truncated: bool = False
     pixel_values: torch.Tensor | None = None
     image_grid_thw: torch.Tensor | None = None
+    policy_model: str | None = None
+    policy_version: int | None = None

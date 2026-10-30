@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 from nano_areal.agent.dsh import DshAgent
 from nano_areal.agent.dsh_audit import reconcile_session
 from nano_areal.engine.proxy import OpenAIProxyServer, OpenAIProxyWorkflow
+from nano_areal.sync.policy import PolicyBinding
 
 
 class AuditProxy(OpenAIProxyServer):
@@ -93,6 +94,13 @@ async def probe(args):
     args.output.mkdir(parents=True, exist_ok=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True)
     proxy = AuditProxy(args.base_url, tokenizer, model_name=args.model)
+    binding = PolicyBinding.read(args.policy_manifest) if args.policy_manifest else None
+    if binding:
+        binding.verify_files()
+        if args.model != binding.model:
+            raise ValueError("Requested model differs from bound policy")
+        proxy.policy_binding = binding
+        proxy.expected_policy_version = binding.version
     proxy.temperature = args.temperature
     report = {
         "scope": "local synthetic nano-swe foundation; not benchmark accuracy",
@@ -108,6 +116,9 @@ async def probe(args):
     await proxy.start()
     interrupted = False
     try:
+        if binding:
+            binding.verify_catalog((await proxy._vllm.models.list()).model_dump())
+            report["policy"] = {**binding.manifest, "model": binding.model}
         for index in range(args.episodes):
             root.mkdir(parents=True, exist_ok=True)
             workspace = Path(tempfile.mkdtemp(prefix=f"episode-{index}-", dir=root))
@@ -129,6 +140,7 @@ async def probe(args):
             proxy.backend_audit = []
             proxy.request_audit = []
             row = {"index": index, "workspace": str(workspace)}
+            trajectories = []
             report["attempted"] += 1
             report["episodes"].append(row)
             (args.output / "report.json").write_text(
@@ -239,6 +251,23 @@ async def probe(args):
                 if tool_turns < 2
                 else "verification-failed"
             )
+            if binding and row["passed"]:
+                binding.verify_catalog((await proxy._vllm.models.list()).model_dump())
+                export = {
+                    "policy": {"model": binding.model, "version": binding.version},
+                    "episode": index,
+                    "reward": agent.last_result["verified_reward"],
+                    "turns": [{
+                        "input_ids": item.input_ids.tolist(),
+                        "response_mask": item.response_mask.tolist(),
+                        "old_log_probs": item.logprobs.tolist(),
+                        "discounted_reward": item.reward,
+                        "truncated": item.truncated,
+                    } for item in trajectories],
+                }
+                (args.output / f"episode-{index}.json").write_text(
+                    json.dumps(export) + "\n"
+                )
             (args.output / "report.json").write_text(
                 json.dumps(report, indent=2) + "\n"
             )
@@ -246,6 +275,8 @@ async def probe(args):
                 break
     finally:
         await proxy.stop()
+    if binding:
+        binding.verify_files()
     report["passed"] = sum(row["passed"] for row in report["episodes"])
     report["pass_rate"] = report["passed"] / report["attempted"]
     report["task_groups_passed"] = int(report["passed"] == args.episodes)
@@ -271,6 +302,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--task-root", type=Path, default=Path(".s1-cache/nano-swe"))
     parser.add_argument("--task-manifest", type=Path)
+    parser.add_argument("--policy-manifest", type=Path)
     parser.add_argument(
         "--hidden-tests", type=Path, default=Path(".s1-cache/nano-swe-hidden-tests")
     )

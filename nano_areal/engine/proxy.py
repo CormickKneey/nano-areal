@@ -56,6 +56,7 @@ class ProxySession:
     active: bool = True
     pending: set[asyncio.Task] = field(default_factory=set, repr=False)
     requests: list[dict] = field(default_factory=list)
+    policy_identity: tuple[str, int] | None = None
 
     def last_interaction(self) -> InteractionRecord | None:
         return self.interactions.get(self._last_id) if self._last_id else None
@@ -100,6 +101,7 @@ class OpenAIProxyServer:
         self._server_task: asyncio.Task | None = None
         self._server = None
         self.expected_policy_version: int | None = None
+        self.policy_binding = None
 
         self._setup_routes()
 
@@ -305,6 +307,8 @@ class OpenAIProxyServer:
                     "logprobs": t.logprobs.tolist(),
                     "reward": t.reward,
                     "truncated": t.truncated,
+                    "policy_model": t.policy_model,
+                    "policy_version": t.policy_version,
                     "pixel_values": (
                         t.pixel_values.tolist() if t.pixel_values is not None else None
                     ),
@@ -352,6 +356,12 @@ class OpenAIProxyServer:
         return_payload: bool = False,
     ) -> JSONResponse | dict:
         messages: list[dict] = body.get("messages", [])
+        binding = self.policy_binding
+        identity = (binding.model, binding.version) if binding else None
+        if session.interactions and session.policy_identity != identity:
+            raise HTTPException(409, "Policy changed inside an active session")
+        session.policy_identity = identity
+        expected_version = self.expected_policy_version
 
         # 1. Tokenize prompt
         pixel_values, image_grid_thw = None, None
@@ -388,6 +398,11 @@ class OpenAIProxyServer:
             vllm_kwargs["tool_choice"] = body.get("tool_choice", "auto")
 
         response = await self._vllm.chat.completions.create(**vllm_kwargs)
+        if binding is not None:
+            try:
+                binding.verify_response(response.model, expected_version)
+            except ValueError as error:
+                raise HTTPException(502, str(error)) from error
 
         # 4. Capture output tokens and logprobs
         choice = response.choices[0]
@@ -425,7 +440,8 @@ class OpenAIProxyServer:
             output_ids = getattr(choice, "token_ids", None)
             if backend_prompt != prompt_ids:
                 raise HTTPException(502, "Backend prompt tokenization differs from proxy")
-            if self.expected_policy_version is not None:
+            if (self.expected_policy_version is not None
+                    and self.policy_binding is None):
                 raise HTTPException(502, "Backend does not report a policy version")
             prompt_ids = backend_prompt
             if (response.usage is None
@@ -469,6 +485,8 @@ class OpenAIProxyServer:
             finish_reason=_finish_reason(choice.finish_reason),
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            policy_model=(binding.model if binding else None),
+            policy_version=(binding.version if binding else None),
         )
         session.interactions[rid] = rec
         session._last_id = rid
@@ -597,6 +615,8 @@ class OpenAIProxyClient:
                         logprobs=torch.tensor(t["logprobs"], dtype=torch.float),
                         reward=t["reward"],
                         truncated=t.get("truncated", False),
+                        policy_model=t.get("policy_model"),
+                        policy_version=t.get("policy_version"),
                         pixel_values=(torch.tensor(t["pixel_values"], dtype=torch.float32)
                                       if t.get("pixel_values") is not None else None),
                         image_grid_thw=(torch.tensor(t["image_grid_thw"], dtype=torch.long)
