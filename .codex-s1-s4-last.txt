@@ -3,111 +3,108 @@ Repository: /Volumes/workspace/github/nano-areal
 Branch: cursor/macos-qwen3vl-v02-plan-f4cf
 PR: #4 OPEN; same branch; no merge or force-push.
 
-Stage after continue6:
+Stage after continue7:
+- Still remaining gate 1: native sampled numerical parity is NOT closed.
 - S1 production HTTP, S2 native parity, accepted S3 and bounded S4 coding
-  gates remain unchanged. Full S4 training is NOT accepted.
-- Still at remaining gate 1: sampled numerical parity is not closed.
-- Production paged prefill/decode with 16-token prefix-cache reuse now
-  reproduces the untouched sampled /0 group twice: MAE 0.00000123694609,
-  max 0.00016190298. This is an unbound reference, NOT native acceptance.
-- Native cached comparisons still fail: dense 0.01101615323, corrected
-  output head 0.01087339527, fused RMS/SwiGLU + FP32 SDPA 0.01277691887.
-- No production/native default, trainer path, manifest or captured
-  probability was changed. The bound native preflight remains 0.01112227.
-- No new rollout starts. Cumulative declared sampling remains 24/49;
-  all 25 failures retained. No informative COMPLETE group. Updates = 0.
-- No changed adapter, v1 feedback, backward/optimizer/export memory result.
+  gates remain intact. Full S4 training is NOT accepted.
+- New bounded observational layer traces reproduce the paged/prefix
+  schedule, identify short-prefill Split-K and bf16 sigmoid arithmetic,
+  and reject unnecessary FP32 RMSNorm/RoPE replacements on shared inputs.
+- None of the complete native counterfactuals passes MAE <= 0.01.
+  Bound native /0 remains 0.01112227; no runtime/policy change is promoted.
+- No new rollout starts: cumulative declared sampling 24/49, all 25
+  failures retained. No informative COMPLETE group. Updates = 0.
+- No changed adapter, v1 feedback, or backward/optimizer/export memory result.
+- No production server started this continuation; no owned model probe,
+  API or engine remains. Full model loads stayed sequential.
 
-Milestones (committed/pushed to the same PR branch):
-- 1168cb6 feat(s4): replay production cache schedules
-  Read-only MLX/paged reference, opt-in native cached reference and prefix
-  accounting, bounded diagnostics, CPU cached/full score/gradient coverage.
-  Production and native loads remain sequential. No update acceptance.
-- e4c4952: previous residual-parity and complete-group handoff.
-- 9dd6b56: actual MLX affine 4-bit -> native HF-layout floating base alignment.
-- 51029c7: gated single episode-balanced optimizer step / immutable v1 export;
-  implementation and CPU coverage, not a measured native optimizer update.
-- 5745564 feat(s4): diagnose affine decode rounding
-  Adds opt-in unbound diagnostics, a PyTorch affine decode reference, and
-  independent synthetic MLX plus gradient checks. Does NOT change any
-  production loader, native architecture default, trainer or policy manifest.
-- 6cf0f06: continue5 isolated float32 attention / residual audit handoff.
-- The latest handoff-only commit follows 1168cb6; resolve with git log -1.
+Milestones committed/pushed to the same PR branch:
+- 14438ae feat(s4): trace residual cache arithmetic
+  Adds observational traces, shared-input operator isolation, diagnostic
+  Split-K/SwiGLU references and CPU/MPS independent MLX tests. No trainer
+  default, production operator, manifest, probability or reward changed.
+- Latest handoff-only commit follows 14438ae; resolve with git log -1.
+- d2e46d8: continue6 handoff.
+- 1168cb6: reproduced production paged/prefix schedule; native cached reference.
+- 6cf0f06 / 5745564: previous residual/affine decode-rounding investigations.
+- e4c4952: previous complete-group and residual-parity handoff.
+- 51029c7: gated one-step episode-balanced update/export implementation only.
+- 9dd6b56: actual MLX affine 4-bit -> native floating-base alignment.
+- d03a3ea / 52d40ff: accepted S3 and bounded S4 evidence; do not regress.
 
-Continue6 findings (ignored artifacts/s4/policy-aligned-audit):
-- All complete diagnostics use the SAME untouched sampled HumanEval/0 group,
-  9 turns / 636 response tokens, rewards [1,1], advantages [0,0].
-- paged-replay.json: production paged kernels, fresh cache each turn,
-  single-row prefill/decode head, MAE 0.00995035268, 55.43s.
-- paged-prefix-replay.json: same kernels plus matching processed prefixes
-  rounded down to 16-token blocks, MAE 0.00000123694609, 26.13s.
-- paged-prefix-confirmation.json: identical MAE, max 0.00016190298, 27.12s.
-  Reused token counts [0,1168,1536,1616,1136,1168,1520,1648,1744].
-  Prefix state carries across turns AND episode boundaries in group order.
-  MLX 0.32.2 / MLX-VLM 0.7.6 / vllm-metal 0.32.0; installed extension,
-  metallibs, Metal kernels, wrapper sources and original evidence hashed.
-- mlx-cached-replay.json: ordinary MLX KVCache, fresh cache per turn,
-  MAE 0.01347209809, 53.73s. Standard MLX forward is not production parity.
-- native-cached-dense.json: native segmented prefill/decode + prefix reuse,
-  original dense projections/head, MAE 0.01101615323, 77.09s.
-- native-cached-head.json: same with single-row affine head correction,
-  MAE 0.01087339527, 221.82s.
-- native-cached-arithmetic.json: dense projections/head, fused RMS/SwiGLU,
-  FP32 SDPA, original RoPE, MAE 0.01277691887, 105.58s. Fails 0.01.
-- native-cached-fused.json: interrupted/retained (status=error,
-  error_type=KeyboardInterrupt), only 1/9 turns and 21/636 tokens completed.
-  Partial MAE 0.01597123034 is NOT a whole-group result; stored 65.53s is
-  last completed turn time, not total wall time to interruption. Do not use
-  the partial group for acceptance. No rollout start was added by this probe.
-- New native diagnostics limit forward execution to <=600 seconds, checking
-  between cached segments, and cache device copies of quantization tensors.
-- Base-only MLX replay rejects nonfinite/changed/nonzero-B adapters. These
-  diagnostics are not a way to ignore a changed v1 adapter.
-- 120 tests pass, including CPU cached/full scores AND adapter gradients,
-  block-offset causal masks, changed-prefix invalidation and deadline guards.
-  These are not measured MPS backward/optimizer/export memory results.
+New measurements (ignored artifacts/s4/policy-aligned-audit):
+All COMPLETE group diagnostics use the SAME original HumanEval/0 group,
+9 turns / 636 response tokens, rewards [1,1], advantages [0,0].
+  file                                    MAE               seconds
+  paged-layer-trace.json                   0.00000123694609   28.54
+  paged-rope-trace.json                    0.00000123694609   29.60
+  paged-rope-confirmation.json             0.00000123694609   29.04
+  native-layer-trace.json                  0.01101615323      79.83
+  native-splitk-trace.json                 0.01116234690      84.54
+  native-splitk-rope-trace.json             0.01116234690      85.40
+  native-splitk-rounded-swiglu.json         0.01063418281      83.28
+  native-full-rounded-swiglu.json          0.01061233982      45.01
+  native-full-rounded-rms.json             0.01327380076      47.44
+  native-full-rounded-head.json            0.01119566381      42.91
+- Production post-RoPE trace and final-source confirmation are BYTE-IDENTICAL:
+  SHA256 3e8384bcd8d6b0558eca8ace936ebe5f24478424d3878463c1dafb92923f585c.
+  Maximum production logprob error remains 0.00016190298. Reference ONLY.
+- Traces observe the last row of each prefill and first decode at all 36
+  layers: 18 segments / 648 layer-position pairs, not every token's activation.
+  Prefix lengths [0,1168,1536,1616,1136,1168,1520,1648,1744].
+  Actual prefill suffix rows [1157,274,70,57,20,272,83,33,30].
+  Evidence hashes, segment offsets and full stage shapes must match.
+- Short-prefill quantized dispatch uses Split-K. Partial products AND the
+  small-column reduction round in bf16 (up to 8 lanes, then ordered addition).
+  On 70-row 2560-input shapes, Q/4096-output uses 1 partition, K/V/1024-output
+  use 5. On 57-row Q it uses 2. The reference matches an independent synthetic
+  actual MLX projection exactly on CPU/MPS, and has finite/nonzero CPU input
+  gradients. Actual first-layer prefill last-row Q/K/V now match in all 9 turns.
+  This does NOT establish whole-group equivalence or native acceptance.
+- shared-input-rms-qk.json: native input/post-attention/K RMSNorm is exact
+  648/648 each, Q RMSNorm 636/648 (mean 3.34931193e-8, max 0.03125). The FP32
+  single-rounding variant matches zero complete rows for every norm type.
+  Preserve native RMSNorm rather than treating more FP32 as equivalent.
+- Same report: rounded_swiglu's intermediate bf16 sigmoid expression matches
+  551/648 rows, mean activation MAE 2.09743579e-8, max 0.0009765625.
+  Native SiLU / all-FP32 means 0.00023012847 / 0.00028516994. Integer-gate MLX
+  fixture matches CPU/MPS exactly; CPU gate/up gradients are finite/nonzero.
+  No arbitrary-range or full-model backward acceptance is inferred.
+- Shared-input native RoPE means Q/K 0.00000651924 / 0.00000814590.
+  FP32 products + bf16 trig worsen these to 0.00082417156 / 0.00094739381;
+  FP32 products + FP32 trig give 0.00109733434 / 0.00128359145.
+  These are averages of activation rows, NOT the token logprob gate metric.
+- Retained rejected attempt native-splitk-fused.json: incorrect initial FP32
+  split reduction + old fused RMS/SwiGLU, owned SIGINT, status=error,
+  KeyboardInterrupt, 365.40s, 2/9 turns / 116/636 tokens. Partial MAE
+  0.00372007981 is NOT a complete-group score or acceptance. No rollout start.
 
-Continue5 finding (ignored artifacts/s4/policy-aligned-audit):
-- affine-isolation.json: actual layer-0 q_proj (2560 -> 4096) and down_proj
-  (9728 -> 2560), seed 42, bf16 normal inputs. Single-row BF16 dense MAEs
-  0.00600267 / 0.01183670; FP32 affine MAEs 0.00577891 / 0.01161732.
-- Installed MLX Metal quantized.h load_vector adds four bf16 inputs before
-  float32 promotion for the bias contribution. Correcting this rounded sum
-  gives exact measured single-row outputs (MAE/max 0 for both projections).
-- Important: 128-row BF16 dense products already match the fused kernel
-  exactly. Applying the decode correction there introduces MAE 0.00647333 /
-  0.01303589. Do not install it universally or infer full operator parity.
-- Eight unbound whole-group experiments use the SAME untouched complete /0
-  group (9 turns / 636 response tokens). All fail the unchanged <= 0.01:
-    decode-operator-diagnostic.json          0.01241930111  66.46s
-    decode-rms-diagnostic.json               0.01419322152  68.62s
-    decode-rms-rope-diagnostic.json          0.01281768727  70.18s
-    decode-fused-all-diagnostic.json         0.01309490551  72.06s
-    dense-fused-all-diagnostic.json          0.01323832762  47.15s
-    decode-prefill-head-diagnostic.json      0.01241974193  65.46s
-    head-bias-rounding-diagnostic.json       0.01090651186  40.68s
-    head-fp32-attention-diagnostic.json      0.01197469242  41.93s
-- Diagnostic exit success means completion, NOT acceptance. No old captured
-  probabilities or manifests were overwritten. Final reports hash evidence
-  and diagnostic source, reject live serving/existing output, and persist
-  completion/error status. Hook-based row splitting is only a hypothesis,
-  not verified production prefill/decode/cache execution equivalence.
+Preserved continue6 references and failed native counterfactuals:
+- Paged+16-token-prefix reference independently reproduced twice before this
+  run: MAE 0.00000123694609, max 0.00016190298, 26.13s / 27.12s. Unbound ONLY.
+- Fresh paged 0.00995035268; ordinary fresh MLX KVCache 0.01347209809.
+- Native cached dense 0.01101615323, corrected head 0.01087339527,
+  fused RMS/SwiGLU + FP32 SDPA 0.01277691887. All fail <=0.01.
+- native-cached-fused.json interrupted: only 1/9 turns, 21/636 tokens,
+  partial 0.01597123034 is NOT whole-group evidence. Prior recorded 65.53s
+  was last completed turn time, not total wall time to interruption.
+- Prior eight whole-sequence counterfactuals remain in docs/s4-training.md;
+  best previous head-bias isolation 0.01090651 still fails.
 
-Preserved bound policy / historical results:
-- policy-aligned/policy-v0.json: s4-policy-v0-d43b14bef7d62f10.
-  Static zero-B rank-8 PEFT, exact prepare roundtrip, 7.29 seconds.
-- policy-aligned-53: 2/2 official external pytest; exact dsh/proxy/backend/
-  export reconciliation. 8 turns / 396 response tokens. Native preflight
-  MAE 0.00486984055, max 0.16891715, 46.26s. THIS group passes numerics;
-  rewards [1,1], advantages [0,0], no optimizer step.
-- policy-aligned-audit/preflight.json: sampled HumanEval/0 MAE 0.01112226647,
-  max 0.49179697, 52.84s, exit 2. Rewards [1,1], advantages [0,0]. Sequence
-  lengths 1177-1898. After-forward MPS allocated/driver 8,954,668,288 /
-  9,884,614,656 bytes; swap 3670.88 -> 3662.88 MiB. NOT backward peaks.
-- Prior float32 affine head-only diagnostic remains 0.01057059142 (fails).
-- Original unaligned failures 0.10771345 / 0.10248081 remain historical.
+Bound policy / historical results (unchanged):
+- artifacts/s4/policy-aligned/policy-v0.json:
+  s4-policy-v0-d43b14bef7d62f10, static zero-B rank-8 PEFT.
+- policy-aligned-53: 2/2 official external pytest, exact dsh/proxy/backend/
+  export reconcile; 8 turns / 396 tokens; native MAE 0.00486984055,
+  max 0.16891715, 46.26s. Numerical pass, zero advantages, no optimizer.
+- policy-aligned-audit/preflight.json: sampled /0 bound MAE 0.01112226647,
+  max 0.49179697, 52.84s, exit 2. Sequence lengths 1177-1898. Forward-only
+  MPS allocated/driver 8,954,668,288 / 9,884,614,656 bytes, swap
+  3670.88 -> 3662.88 MiB. These are NOT backward peaks or new memory results.
+- Prior FP32 affine-head-only MAE 0.01057059142 still fails.
+- Unaligned historical failures 0.10771345 / 0.10248081 remain.
 
-Declared sampling / all-start denominator (UNCHANGED this run):
+Declared sampling / denominator (UNCHANGED this run):
   directory                 task          temp  passed/started eligible
   policy-aligned-53          HumanEval/53  0     2/2            2/2
   policy-sampled-0           HumanEval/0   0.8   2/2            2/2
@@ -115,72 +112,56 @@ Declared sampling / all-start denominator (UNCHANGED this run):
   policy-sampled-38          HumanEval/38  1.0   0/4            3/4
   policy-sampled-91          HumanEval/91  0.8   0/4            3/4
   policy-sampled-109         HumanEval/109 0.8   3/4            3/4
-- Earlier 17/31 plus continue4's 7/18 = 24/49. All 25 failures retained.
-  These are engineering starts, NOT HumanEval accuracy or pass@k.
-- Same generic instruction, 512-token cap, 120-second activity deadline,
-  unchanged official external rewards, fresh workspaces, no sampling seed.
-- /32 includes max-tokens; /38 and /91 each include a timeout. Apparent
-  /109 [1,1,0,1] cannot train: its failed episode is truncated. No selection
-  of complete subsets, pooling across tasks/groups or proxy/discount rewards.
+- Earlier 17/31 plus continue4's 7/18 = 24/49, all 25 failures retained.
+- Generic instruction, 512-token cap, 120-second activity deadline, unchanged
+  official external rewards, fresh workspaces, no sampling seed.
+- /32 includes max-tokens; /38 and /91 each include a timeout. /109 apparent
+  [1,1,0,1] cannot train: failed episode truncated. No selection of complete
+  subsets, task/group pooling or proxy/turn-discount reward spread.
 
-Reproduce from repository root (new diagnostic output filenames only):
+Reproduce (NEW output names only):
   export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
   export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
   export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
-  # Keep owned production API AND engine stopped; sequential native only.
+  # Keep owned production API AND engine stopped; sequential model loads.
   .s1-cache/venv-metal/bin/python scripts/diagnose_s4_replay.py \
     --policy artifacts/s4/policy-aligned/policy-v0.json \
     --group artifacts/s4/policy-sampled-0 --execution paged --prefix-reuse \
-    --output artifacts/s4/policy-aligned-audit/paged-prefix-reproduce.json
-  # Omit --prefix-reuse for fresh-cache paged execution; --execution cached
-  # uses ordinary MLX KVCache. All are teacher-forced diagnostics, not starts.
+    --trace-output artifacts/s4/policy-aligned-audit/new-paged-trace.safetensors \
+    --output artifacts/s4/policy-aligned-audit/new-paged-trace.json
   .venv/bin/python scripts/diagnose_s4_operators.py \
     --policy artifacts/s4/policy-aligned/policy-v0.json \
     --group artifacts/s4/policy-sampled-0 --cached-execution --prefix-reuse \
-    --dense-projections --dense-head \
-    --output artifacts/s4/policy-aligned-audit/native-cached-reproduce.json
-  # Head comparison: omit --dense-head. Arithmetic comparison: keep it and
-  # add --fused-rms --fused-swiglu --fp32-attention. Choose NEW outputs.
-  # Preserve the earlier whole-sequence operator diagnostic reproduction:
-  .venv/bin/python scripts/diagnose_s4_operators.py \
+    --dense-projections --dense-head --splitk-prefill \
+    --trace-output artifacts/s4/policy-aligned-audit/new-native-trace.safetensors \
+    --trace-reference artifacts/s4/policy-aligned-audit/new-paged-trace.safetensors \
+    --output artifacts/s4/policy-aligned-audit/new-native-trace.json
+  .venv/bin/python scripts/diagnose_s4_trace.py \
     --policy artifacts/s4/policy-aligned/policy-v0.json \
-    --group artifacts/s4/policy-sampled-0 --dense-projections --prefill-head \
-    --output artifacts/s4/policy-aligned-audit/head-rounding-reproduce.json
-  # Add --fp32-attention with a DIFFERENT output for the final variant.
-  # No flag or diagnostic result changes an accepted/bound policy.
-  # Existing bound preflight (expected exit 2; overwrites its report, not probs):
-  .venv/bin/python scripts/probe_s4_training.py preflight \
-    --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
-    --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
-    --output artifacts/s4/policy-aligned-audit --group artifacts/s4/policy-sampled-0
-
-Validation:
+    --trace artifacts/s4/policy-aligned-audit/new-paged-trace.safetensors \
+    --output artifacts/s4/policy-aligned-audit/new-shared-inputs.json
+  # For rounded sigmoid add --rounded-swiglu to native command, NEW outputs.
+  # Omit --splitk-prefill/--cached-execution/--prefix-reuse and trace flags
+  # for the full-forward rounded-sigmoid dense-head counterfactual.
   PYTHONPATH=. .venv/bin/python -m pytest -q \
-    --basetemp=.s1-cache/tmp/pytest-continue6-final-reproduce
-  # 120 passed. Targeted Ruff and git diff --check pass.
-  .venv/bin/ruff check nano_areal/archon/s4_operators.py \
-    nano_areal/archon/s4_replay.py scripts/diagnose_s4_replay.py \
-    scripts/diagnose_s4_operators.py scripts/test_s4_operators.py \
-    scripts/test_s4_replay.py
+    --basetemp=.s1-cache/tmp/pytest-continue7-reproduce
 
-Remaining gates, in order:
-1. Close NATIVE sampled parity without loosening MAE <= 0.01. The production
-   paged/prefix reference is now reproduced; use that schedule for layerwise
-   native-vs-production traces rather than treating ordinary MLX KVCache or
-   full-sequence row-splitting as the target. Inspect real prefill suffix
-   shapes, quantized dispatch, RoPE precision and attention accumulation.
-   Isolated affine correctness is not sufficient. Preserve architecture
-   acceptance separately. Bind fresh policies before claiming changed-runtime
-   rollout acceptance; counterfactuals are never relabeled as bound rollouts.
-2. Obtain genuinely informative COMPLETE declared groups with original external
-   rewards. All-success advantages remain zero; failures stay in denominator.
-3. Only then run bounded one-step update, nonzero/finite gradient and delta,
-   immutable changed v1, exact export roundtrip, production restart and fresh
-   reconciled feedback, measured backward/optimizer/export/serving memory.
-   No-swap-growth and sampled-driver-budget gates remain unchanged. No
-   long-context or co-residency qualification is implied.
+Validation: 136 tests pass; targeted Ruff and git diff --check pass.
+CPU/MPS isolated forward equality and CPU operator gradients are NOT native
+full-model backward, optimizer, changed export or memory qualification.
 
-No server was started this run; no owned production API/engine remains.
-No multi-hour GRPO, OrbStack quit, remount, sudo, passwords, merge, force-push,
-weights, hidden checks, task solutions or raw-session commits. All caches and
-ignored evidence stay on /Volumes/workspace under this repository.
+Next in order:
+1. Close unchanged <=0.01 bound native preflight on sampled COMPLETE groups.
+   Combine verified actual-shape prefill dispatch / bf16 sigmoid references
+   with still-mismatching decode/head arithmetic; use shared production
+   inputs to separate local errors from hidden/cache accumulation. Preserve
+   native RMSNorm and bf16 RoPE products; investigate remaining trig and
+   paged-attention arithmetic. No unbound reference promotion.
+2. Only after numerics, declare fresh genuinely informative COMPLETE groups
+   with external rewards unchanged. No cherry-picking/truncation workaround.
+3. Only then invoke the gated ONE-step update/export path; export changed
+   immutable v1, restart production on it, reconcile fresh feedback and
+   measure backward/optimizer/export memory. Never co-resident serving/native.
+4. Commit/push milestones to this PR branch; no merge or force-push. Keep
+   caches/raw traces/weights/hidden tests/solutions/sessions ignored on this
+   repository's /Volumes/workspace path. No sudo/remount/OrbStack actions.
