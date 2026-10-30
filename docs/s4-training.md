@@ -1,5 +1,26 @@
 # S4 production policy preflight: October 30, 2026
 
+## Continue10: first informative complete whole group
+
+The predeclared `continue10-sampling-plan.json` selects independent pairs for
+HumanEval/10, /20 and /54 at temperature **1.0**, no seed, **2048** output
+tokens and a **300-second** activity deadline, stopping further starts at the
+first informative complete group. Only the /10 pair starts. Both episodes
+complete with strict reconciliation and unchanged official external pytest
+rewards **[1,0]**, giving episode advantages **[1,-1]**. The failed candidate
+contains a Python syntax error that causes external pytest collection to
+fail; this is a candidate failure, not the broken /38 official helper. No
+test, prompt, reward, episode subset or turn discount is changed.
+
+`policy-continue10-10` retains all **2/2** starts, with **9 turns / 1338 response
+tokens** (611 successful-episode tokens and 727 failed-episode tokens).
+Cumulative engineering sampling becomes **36/81 successes, 45 failures
+retained**; this is not HumanEval accuracy or pass@k. The /20 and /54 pairs
+remain unstarted, not denominator entries. The owned production API and engine
+stop before the new whole-group native preflight. Existing /0 and /53
+numerical evidence and the **0.01** threshold remain unchanged. An informative
+group alone does not qualify an optimizer step, changed adapter or full S4.
+
 ## Continue9: declared sampling still has no informative complete group
 
 Continue9 declares and completes three additional two-episode groups with the

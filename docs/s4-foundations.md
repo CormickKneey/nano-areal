@@ -2,6 +2,17 @@
 
 ## Status: bounded coding gate passes; training remains unaccepted
 
+Continue10 obtains the first informative COMPLETE whole group: HumanEval/10
+has unchanged external rewards **[1,0]**, advantages **[1,-1]**, strict
+reconciliation and no truncation/timeout. The zero reward is a candidate
+syntax-error failure, not a broken official test helper. Both starts remain
+in the ledger: **36/81 successes, 45 failures retained**, including continue9's
+six starts. The declared /20 and /54 pairs do not start because the plan stops
+at the first informative group. Its own native **MAE <= 0.01** preflight must
+still qualify any bounded optimizer/export/feedback work. See
+[training evidence](s4-training.md); no full S4 acceptance follows from reward
+spread alone.
+
 Continue8 closes the original sampled /0 numerical gate in an explicit,
 source-bound native runtime: **0.00969663451268 MAE <= 0.01**, all **9 turns /
 636 response tokens**, repeated with the same result. The original default
