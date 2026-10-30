@@ -145,6 +145,16 @@ class AlignedS4Runtime:
             raise ValueError("Turn is outside the declared bound group")
         self.index = index
 
+    def start_update(self):
+        if not any(
+            index == len(self.history) - 1 for index, state in self.states.values()
+        ):
+            raise ValueError(
+                "Complete the full preflight before starting the update budget"
+            )
+        self.states.clear()
+        self.started = time.monotonic()
+
     def activate_segment(self, start, end, prompt):
         if time.monotonic() - self.started > 600:
             raise TimeoutError("Aligned replay exceeded its 600-second runtime budget")
@@ -196,7 +206,7 @@ class AlignedS4Runtime:
                 "gradients": "Recompute complete cache history, no detached prefix KV; "
                              "non-reentrant layer checkpoints; first-order Metal RMS",
                 "scope": "Text-only declared group, prefill suffix >=16 rows",
-                "max_runtime_seconds": 600}
+                "max_runtime_seconds_per_phase": 600}
 
     def verify_sources(self):
         if self.source_sha256 != {name: file_digest(Path(name))

@@ -284,6 +284,8 @@ def main():
             if not report["blockers"]:
                 report["status"] = "preflight-passed-no-update"
             if args.phase == "update" and not report["blockers"]:
+                if aligned_runtime is not None:
+                    aligned_runtime.start_update()
                 report["phase_memory"] = []
 
                 def snapshot(stage):

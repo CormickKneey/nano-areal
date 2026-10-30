@@ -122,3 +122,20 @@ def test_bound_runtime_has_a_hard_segment_deadline():
             trainer.response_logprobs(runtime.history[0])
     finally:
         runtime.close()
+
+
+def test_bound_runtime_renews_update_budget_only_after_full_preflight():
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        with pytest.raises(ValueError, match="full preflight"):
+            runtime.start_update()
+        with torch.no_grad():
+            for index in range(len(runtime.history)):
+                runtime.select_turn(index)
+                trainer.response_logprobs(runtime.history[index])
+        previous = runtime.started
+        runtime.start_update()
+        assert runtime.started > previous and not runtime.states
+    finally:
+        runtime.close()
