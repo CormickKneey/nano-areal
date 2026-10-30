@@ -1,5 +1,90 @@
 # S4 production policy preflight: October 30, 2026
 
+## Continue6: production cache schedule reproduced
+
+The same untouched sampled HumanEval/0 group (**9 turns / 636 response tokens**)
+now has an independent teacher-forced reference using the installed production
+`vllm-metal` paged attention wrappers and kernels. This does not start an HTTP
+server, sample new episodes, change a manifest, or replace the native trainer.
+The probe checks the original immutable binding and requires an exactly zero-B,
+finite adapter before replaying the base alone. Changed adapters are rejected,
+not silently ignored. All results remain **unbound diagnostics**.
+
+| Evidence under artifacts/s4/policy-aligned-audit | Execution | MAE | Seconds |
+| --- | --- | ---: | ---: |
+| paged-replay.json | Paged prefill + one-token decode, fresh cache per turn | 0.00995035268 | 55.43 |
+| paged-prefix-replay.json | Same kernels, 16-token block-aligned prefix reuse | 0.00000123695 | 26.13 |
+| paged-prefix-confirmation.json | Independent repeat with binary/kernel source hashes | 0.00000123695 | 27.12 |
+| mlx-cached-replay.json | Standard MLX KVCache, fresh cache per turn | 0.01347209809 | 53.73 |
+| native-cached-dense.json | Native dense prefill/decode + prefix reuse | 0.01101615323 | 77.09 |
+| native-cached-head.json | Native cache + prefix reuse, affine single-row head | 0.01087339527 | 221.82 |
+| native-cached-arithmetic.json | Native dense cache + prefix, fused RMS/SwiGLU, FP32 SDPA | 0.01277691887 | 105.58 |
+
+The replay uses the original tokens and probabilities, bf16 paged KV storage,
+36 wrapped attention layers, absolute text positions, and a single-row output
+head for both the final prefill token and each decode token. Prefix reuse is
+bounded by the longest matching **already processed** prefix, rounded down to
+16-token blocks, leaving at least one prompt token to process. It carries the
+cache across turns and episode boundaries in original group order. This
+reconstructs the sampled behavior probabilities to about 1.24e-6 aggregate MAE;
+it is stronger evidence for the production cache schedule than row-splitting
+hooks or a standard MLX model forward. It does not prove an exact scheduler
+trace or qualify any other group, adapter, context length, or gradient path.
+The independent repeat gives the identical aggregate MAE and maximum token
+error **0.00016190298**. Reused-token counts in group order are
+**[0,1168,1536,1616,1136,1168,1520,1648,1744]**. The confirmation records
+MLX **0.32.2**, MLX-VLM **0.7.6**, vllm-metal **0.32.0**, and hashes of the
+installed Metal extension, metallibs, and kernel sources as well as wrappers.
+
+The native cached reference is separate from `response_logprobs`: production,
+native architecture defaults, accepted S1/S2/S3, and the bound policy preflight
+are untouched. CPU tests compare cached and full causal scores, exercise
+block-aligned prefix reuse with a nonzero offset, and check finite/nonzero
+adapter gradients. Passing these reference contracts is not a measured MPS
+backward or a policy runtime transition. The unchanged bound native preflight
+is still **0.01112227**, above **0.01**.
+
+Neither the corrected cached output head nor the cached arithmetic combination
+closes native parity. A separate all-corrected cached attempt with FP32 RoPE
+(`native-cached-fused.json`) was interrupted and retained with `status=error`,
+`error_type=KeyboardInterrupt`: only **1/9 turns, 21/636 tokens** completed.
+Its partial MAE **0.01597123034** is not a whole-group result; its stored elapsed
+time refers to the last completed turn, not total wall time to interruption.
+There is no selection of its partial group as evidence for acceptance. Native
+diagnostics now enforce a forward deadline of at most 600 seconds, including
+between cached segments, and reuse uploaded quantization tensors rather than
+copying the same tensors from CPU for every generated token.
+
+```bash
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+# Stop the owned production API AND engine before any replay/native load.
+.s1-cache/venv-metal/bin/python scripts/diagnose_s4_replay.py \
+  --policy artifacts/s4/policy-aligned/policy-v0.json \
+  --group artifacts/s4/policy-sampled-0 --execution paged --prefix-reuse \
+  --output artifacts/s4/policy-aligned-audit/paged-prefix-reproduce.json
+# Omit --prefix-reuse for fresh-cache paged execution; use --execution cached
+# for the standard MLX cache comparison. Always choose a new output filename.
+.venv/bin/python scripts/diagnose_s4_operators.py \
+  --policy artifacts/s4/policy-aligned/policy-v0.json \
+  --group artifacts/s4/policy-sampled-0 --cached-execution --prefix-reuse \
+  --dense-projections --dense-head \
+  --output artifacts/s4/policy-aligned-audit/native-cached-dense-reproduce.json
+```
+
+Do not confuse the near-exact production replay with native numerical gate
+acceptance. No new declared sampling is unlocked: **24/49 starts**, **25 failures
+retained**, no informative COMPLETE group. **Updates = 0**; no changed v1 adapter,
+fresh v1 production feedback, or backward/optimizer/export memory result.
+Full S4 training remains unaccepted.
+
+Validation: **120 tests pass**, including cached/full CPU score and adapter
+gradient parity, changed-prefix invalidation, zero-B-only replay guards,
+contiguous-response checks, and rejection of unbounded diagnostic deadlines.
+Targeted Ruff and `git diff --check` pass. Reproduce the suite with
+`PYTHONPATH=. .venv/bin/python -m pytest -q --basetemp=.s1-cache/tmp/pytest-replay`.
+
 ## Continue5: isolated decode rounding, parity still blocked
 
 The first remaining gate was investigated without starting production, adding

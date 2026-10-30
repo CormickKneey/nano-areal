@@ -16,6 +16,7 @@ from nano_areal.archon import model as native_model
 from nano_areal.archon.model import RMSNorm
 from nano_areal.archon.qwen3vl_lora import NativeQwen3VLLoRATrainer
 from nano_areal.archon.s4_operators import affine_decode
+from nano_areal.archon.s4_replay import cached_text_logprobs
 from nano_areal.archon.s4_update import trajectory_from_turn
 from nano_areal.archon.state_dict import qwen3vl_hf_key
 from nano_areal.sync.policy import PolicyBinding, file_digest
@@ -33,7 +34,14 @@ def main():
     parser.add_argument("--dense-head", action="store_true")
     parser.add_argument("--prefill-head", action="store_true")
     parser.add_argument("--fp32-attention", action="store_true")
+    parser.add_argument("--cached-execution", action="store_true")
+    parser.add_argument("--prefix-reuse", action="store_true")
+    parser.add_argument("--max-seconds", type=float, default=600)
     args = parser.parse_args()
+    if args.prefix_reuse and not args.cached_execution:
+        parser.error("Prefix reuse requires cached execution")
+    if not 0 < args.max_seconds <= 600:
+        parser.error("Diagnostic deadline must be in (0, 600] seconds")
     if args.output.exists():
         parser.error("Diagnostic evidence must not be overwritten")
     require_stopped_server()
@@ -59,6 +67,14 @@ def main():
                     for suffix in (".weight", ".scales", ".biases")
                 )
     context = {}
+    device_quantized = {}
+
+    def quantized_on_device(name, device):
+        if name not in device_quantized:
+            device_quantized[name] = tuple(
+                value.to(device) for value in quantized[name])
+        return device_quantized[name]
+
     handles = []
     original_rope = native_model.apply_rope
     original_attention = torch.nn.functional.scaled_dot_product_attention
@@ -86,7 +102,7 @@ def main():
             start = context["decode_start"]
             if start >= hidden.shape[-2]:
                 return output
-            tensors = [value.to(hidden.device) for value in quantized[name]]
+            tensors = quantized_on_device(name, hidden.device)
             replacement = affine_decode(hidden[..., start:, :], *tensors)
             return torch.cat((output[..., :start, :], replacement), dim=-2)
         return hook
@@ -143,7 +159,7 @@ def main():
                   str(path): file_digest(path) for path in (
                       Path(__file__), Path(native_model.__file__).with_name(
                           "s4_operators.py"
-                      ),
+                      ), Path(native_model.__file__).with_name("s4_replay.py"),
                   )
               },
               "planned_turns": sum(len(item["turns"]) for item in episodes),
@@ -156,29 +172,59 @@ def main():
               "dense_head": args.dense_head,
               "prefill_head": args.prefill_head,
               "fp32_attention": args.fp32_attention,
+              "cached_execution": args.cached_execution,
+              "prefix_reuse": args.prefix_reuse,
+              "max_seconds": args.max_seconds,
               "turns": []}
     started = time.monotonic()
+    cache_state = {} if args.prefix_reuse else None
     try:
         for episode in episodes:
             for item in episode["turns"]:
+                if time.monotonic() - started >= args.max_seconds:
+                    raise TimeoutError("Diagnostic exceeded its forward deadline")
                 trajectory, old = trajectory_from_turn(item)
                 positions = torch.nonzero(
                     trajectory.response_mask[1:], as_tuple=True
                 )[0]
                 context["decode_start"] = int(positions[0]) + 1
                 with torch.no_grad():
-                    dense = trainer.response_logprobs(trajectory).cpu()[0]
-                    hidden = context.pop("hidden")[:, positions.to("mps")]
-                    tensors = [value.to("mps") for value in quantized[
-                        "language_model.embed_tokens"]]
-                    logits = affine_decode(hidden, *tensors).float()
-                    labels = trajectory.input_ids[1:][positions].to("mps")
-                    current = logits.log_softmax(-1).gather(
-                        -1, labels[None, :, None]
-                    ).flatten().cpu()
-                    if args.prefill_head:
-                        current = torch.cat((dense[:1], current[1:]))
-                    candidate = dense if args.dense_head else current.cpu()
+                    if args.cached_execution:
+                        prompt = int(positions[0]) + 1
+
+                        def before_segment(start, end):
+                            if time.monotonic() - started >= args.max_seconds:
+                                raise TimeoutError(
+                                    "Diagnostic exceeded its forward deadline")
+                            context["decode_start"] = end if end == prompt else 0
+
+                        def project_head(hidden, start, end):
+                            if args.dense_head or (args.prefill_head and end == prompt):
+                                return torch.nn.functional.linear(
+                                    hidden,
+                                    trainer.model.language_model.embed_tokens.weight)
+                            tensors = quantized_on_device(
+                                "language_model.embed_tokens", hidden.device)
+                            return affine_decode(hidden, *tensors)
+
+                        candidate = cached_text_logprobs(
+                            trainer.model, trajectory, before_segment, project_head,
+                            state=cache_state,
+                        ).cpu()[0]
+                    else:
+                        dense = trainer.response_logprobs(trajectory).cpu()[0]
+                        hidden = context.pop("hidden")[:, positions.to("mps")]
+                        tensors = quantized_on_device(
+                            "language_model.embed_tokens", "mps")
+                        logits = affine_decode(hidden, *tensors).float()
+                        labels = trajectory.input_ids[1:][positions].to("mps")
+                        current = logits.log_softmax(-1).gather(
+                            -1, labels[None, :, None]
+                        ).flatten().cpu()
+                        if args.prefill_head:
+                            current = torch.cat((dense[:1], current[1:]))
+                        candidate = dense if args.dense_head else current.cpu()
+                        del hidden, tensors, logits, current, dense
                     error = (candidate - old[trajectory.response_mask]).abs()
                     if not bool(torch.isfinite(error).all()):
                         raise ValueError("Nonfinite diagnostic logprob difference")
@@ -186,8 +232,11 @@ def main():
                                         "mae": float(error.mean()),
                                         "max": float(error.max()),
                                         "first_error": float(error[0]),
+                                        "reused_tokens": (cache_state["reused_tokens"]
+                                                          if cache_state else 0),
                                         "max_error_position": int(error.argmax())})
-                del hidden, tensors, logits, current, dense, candidate
+                context.pop("hidden", None)
+                del candidate
                 report["elapsed_seconds"] = time.monotonic() - started
                 report["mae"] = sum(row["mae"] * row["tokens"]
                                     for row in report["turns"]) / sum(
@@ -198,9 +247,12 @@ def main():
         if evidence_hashes != {str(path): file_digest(path) for path in evidence}:
             raise ValueError("Captured evidence changed during the diagnostic")
         report["status"] = "diagnostic-complete"
+        report["max_logprob_mae"] = 0.01
+        report["within_bound"] = report["mae"] <= 0.01
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     except BaseException as error:
-        report.update(status="error", error_type=type(error).__name__, error=str(error))
+        report.update(status="error", error_type=type(error).__name__, error=str(error),
+                      elapsed_seconds=time.monotonic() - started)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         raise
     finally:
