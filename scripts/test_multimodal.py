@@ -243,6 +243,10 @@ class ImageProxyTests(unittest.IsolatedAsyncioTestCase):
                 http_client=client,
             )
         self.assertEqual(rewards, {"turn-1": 1.0, "turn-2": 1.0})
+        self.assertIn("default filesystem directory is '.'",
+                      requests[0]["messages"][0]["content"])
+        self.assertEqual(requests[0]["messages"][-1]["content"], "List files")
+        self.assertEqual(requests[1]["messages"][-1]["content"], "Again")
         self.assertEqual(requests[1]["tools"], requests[0]["tools"])
         self.assertEqual(
             [message["role"] for message in requests[1]["messages"]],

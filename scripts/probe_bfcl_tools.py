@@ -36,10 +36,12 @@ async def probe(args):
         ),
     ):
         responses = []
+        requests = []
 
         async def capture(response):
             await response.aread()
             responses.append(response.json())
+            requests.append(json.loads(response.request.content))
 
         sample = BFCLSample(
             "offline-two-turn-ls",
@@ -61,6 +63,7 @@ async def probe(args):
         report["fixtures"][label] = {
             "rewards": list(rewards.values()),
             "responses": responses,
+            "requests": requests,
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

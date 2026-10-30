@@ -1,6 +1,30 @@
 # S3 multimodal foundation: October 30, 2026
 
-## Status: hard-blocked, not S3 acceptance
+## Status: measured S3 gates pass after prompt correction
+
+### Current result: unchanged BFCL 2/2, October 30
+
+The production hermes probe now returns real `ls(path=".")` calls on both
+unchanged user turns, `List files` and `Again`, with unchanged schemas,
+ground truth, automatic tool choice, temperature 0 and 128 output tokens.
+The general system prompt now tells the agent to execute actionable requests,
+defines the default filesystem directory as `.`, and preserves arguments on
+repeat requests. It contains no fixture-specific user strings or expected
+function names. Merely defining a default directory without the execution
+instruction reached only 1/2; that failed diagnostic is retained too.
+
+Reproduce with the production server command in `docs/s4-foundations.md`:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/probe_bfcl_tools.py --parser hermes \
+  --output artifacts/s3/bfcl-action-hermes-replay.json
+```
+
+Evidence: `artifacts/s3/bfcl-cwd-hermes.json` (1/2) and
+`artifacts/s3/bfcl-action-hermes.json` (2/2). The CLEVR-count loss-drop
+measurement below is unchanged. These measured S3 gates now pass; this does
+not establish broader BFCL accuracy or S4 training readiness. Earlier blocked
+results below are historical, not the current result.
 
 ### Follow-up: parser correction and unchanged fixture, October 30
 
