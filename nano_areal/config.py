@@ -9,6 +9,8 @@ from nano_areal.dataset import DatasetConfig
 @dataclass
 class ModelConfig:
     model_name: str = "Qwen/Qwen3-0.6B"
+    # Optional rollout checkpoint. Empty means model_name (v0.1).
+    infer_model_name: str = ""
     # Tokenizer defaults to model_name if not set
     tokenizer_name: str = ""
     max_model_len: int = 4096
@@ -25,6 +27,8 @@ class RolloutConfig:
     # GPU assignment
     gpu_ids: list[int] = field(default_factory=lambda: [0])
     tensor_parallel_size: int = 1
+    # metal → vllm-metal; cuda → vLLM OpenAI server
+    inference_backend: Literal["metal", "cuda"] = "cuda"
 
     # Sampling
     group_size: int = 8        # G: trajectories sampled per problem
@@ -50,7 +54,10 @@ class TrainConfig:
     weight_decay: float = 0.01
     grad_clip: float = 1.0
 
-    # GRPO
+    # GRPO is the default. cispo / gspo / drgrpo are the P1 toggles.
+    loss: Literal["grpo", "cispo", "gspo", "drgrpo"] = "grpo"
+    # When set and the batch is divisible by it, advantages are per group.
+    group_size: int | None = None
     kl_coef: float = 0.01
     clip_eps: float = 0.2
     recompute_logprobs: bool = True   # required for off-policy data
@@ -95,6 +102,10 @@ class NanoArealConfig:
 
     # Cluster mode
     mode: Literal["async", "sync"] = "async"
+    # metal is the v0.2 Mac path. The historical default stays cuda so
+    # `python train.py` without flags still matches v0.1.
+    backend: Literal["metal", "cuda"] = "cuda"
+    agent: Literal["bfcl", "dsh"] = "bfcl"
 
     # Logging
     log_dir: str = "logs"
@@ -107,7 +118,9 @@ class NanoArealConfig:
         """Sync mode config for single Apple Silicon machine."""
         cfg = cls()
         cfg.mode = "sync"
+        cfg.backend = "metal"
         cfg.model.device = "mps"
+        cfg.rollout.inference_backend = "metal"
         cfg.rollout.gpu_ids = [0]
         cfg.train.gpu_ids = [0]
         cfg.train.compile = False          # torch.compile unreliable on macOS

@@ -1,0 +1,153 @@
+S1-S4 handoff: continue13 closeout, October 31, 2026
+Repo: /Volumes/workspace/github/nano-areal
+Branch: cursor/macos-qwen3vl-v02-plan-f4cf; PR #4 OPEN
+Stage: S1/S2/S3 and bounded S4 coding remain accepted.
+The bounded one-step S4 training/export/production/native feedback gates PASS.
+Qualified chain Updates = 1. No multi-hour GRPO, benchmark improvement,
+8192-token training, serving-device peak or co-residency claim.
+
+Current qualified source: native-s4-affine-cache-r18 at 1f89565.
+The final documentation commit follows; resolve git log -1.
+Commits pushed to the SAME branch, no merge or force-push:
+- acc99aa perf(s4): cache attention with stable gate gradients
+- 1f89565 perf(s4): reclaim unused replay allocator caches
+Previous tip 8560e32, qualified r13 source 2c8e77f remains historical.
+
+Implemented ONLY in the opt-in aligned S4 runtime:
+- Opaque native PyTorch custom op retains complete tokenwise attention outputs
+  in selective checkpoints; forward uses the exact qualified formula, NOT
+  rejected r14/r15 Metal attention fusion. Batched full Q/K/V backward remains.
+- Retain frozen gate/down MLP products, not up; checkpoint token heads.
+- Stable first-order rounded sigmoid derivative preserves exact forward;
+  avoids overflow-times-zero through exp(abs(gate)). CPU/MPS saturated-input
+  tests compare against independent fp64 SiLU gradients.
+- Release only UNUSED MPS allocator cache every144 layer-segment entries,
+  including recomputation. Reclamation time counts toward the same deadline.
+- Complete-group shared history and one episode-balanced backward remain;
+  no historical KV detachment, no production-reference gradients, no budget
+  or allocation-limit changes. Failed-gradient errors identify parameter names.
+
+Locked numerical gates, SOURCE-BOUND on final r18:
+- Original sampled HumanEval/0: MAE0.009696634512675821 <=0.01;
+  9 turns /636 response tokens, elapsed168.50899262499297s.
+  artifacts/s4/policy-continue13-reclaim-0/preflight.json
+  Expected blocked/exit2 ONLY because rewards[1,1], advantages[0,0].
+- Exact informative WHOLE HumanEval/10: MAE0.007422680729897122 <=0.01;
+  rewards[1,0], advantages[1,-1], 2/2 eligible episodes, 9 turns /1338 tokens.
+  Rechecked in the update BEFORE any backward. Negative reward is an actual
+  candidate SyntaxError, not the broken /38 helper. No pooling/cherry-picking.
+- Fresh native-v1 /10: MAE0.008663687576587205 <=0.01;
+  9 turns /904 tokens, elapsed231.79751437497907s.
+  artifacts/s4/policy-continue13-v1-preflight-10/preflight-v1.json
+  policy_parity_passed=true. Expected blocked/exit2 solely from homogeneous
+  rewards[1,1], advantages[0,0]. Its read-only updates=0 is NOT a reset of
+  the qualified training chain's one update. Do NOT update on this group.
+
+First fully qualified bounded update:
+artifacts/s4/policy-continue13-reclaim-update-10/update.json
+- status=updated-exported-feedback-pending; updates=1. Feedback subsequently
+  completes in separate immutable evidence; do not rewrite the update report.
+- Nine forwards313.69065545799094s, 3528 segment entries,24 cache reclaims.
+- Single complete backward541.6195920409809s,7056 entries,49 cache reclaims.
+- ONE optimizer step541.8996607080044s <= unchanged600s update-phase budget.
+  Independent preflight also stays within600s; total882.3983323330176s is
+  NOT a600s combined-phase claim.
+- All adapter gradients present/finite; pre-clip norm0.15002289414405823;
+  adapter delta L1=147.10803923694766; equal episodes, token mean per episode.
+- Immutable adapter-v1/policy-v1.json; changed tensor hash, exact PEFT roundtrip.
+  Before:0cadd9374244b6954871ca47afba64e8c8feafe61080d25b8e75c7012c4f9572
+  After: ba1d957f8366021b331deb8442d6720d7b0457c5c8f7dd9501367c1025ae7f32
+- 7732 valid100ms samples: allocated peak22469236480, driver25527287808
+  <=26800603136 bytes; RSS high-water1493827584 bytes.
+- OWN phase baseline swap4188.38 ->3772.38 MiB, delta-416.0: memory gatePASS.
+  System swap at initial run inspection was3518.00 MiB; it was not zeroed.
+- Qualified policy:s4-policy-v1-b60ac01c1b9c71ef
+  Parent:s4-policy-v0-d43b14bef7d62f10
+
+Fresh production/native-v1 feedback, sequential loads ONLY:
+- artifacts/s4/policy-continue13-v1-production/sampling-plan.json declares
+  two HumanEval/10 episodes, temperature1.0, max-output2048, timeout300s,
+  before either fresh start. Same settings as original informative /10.
+- Owned production loads the QUALIFIED r18 v1, not r17's blocked export.
+  Captured /v1/models catalog validates exact model/adapter/base identity.
+- artifacts/s4/policy-continue13-v1-10/report.json:2/2 external pytest passes,
+  COMPLETE and training-eligible;9 turns /904 tokens;3/4 tool turns;
+  one dsh session each; exact per-turn token/tool reconciliation; no
+  truncation, tool errors, failed proxy requests or missing episodes.
+- Actual production KV layout2133 blocks /4.69 GiB, not nominal cache flag.
+  Serving endpoint swap3853.25 ->3797.25 MiB; RSS/endpoints are NOT sampled
+  serving-device peaks. API318 and engine330 both exit before native-v1 load.
+- Fresh native-v1 numerical gate above passes. No additional optimizer step.
+- v0 exploration ledger unchanged36/81 successes,ALL45 failures retained;
+  separate v1 feedback2/2; combined38/83 engineering starts, NOT accuracy
+  or a policy-improvement estimate. /20 and /54 remain declared/unstarted.
+
+Retained failures, NEVER overwrite:
+- policy-continue13-attention-cache-{0,update-10}:r16. Both numerical gates
+  pass exactly. FIRST complete backward580.2873166250065s,7056 entries, but
+  strict gradient check fails. Updates0; allocated22470049536,
+  driver26790805504; swap-568.81; memory pass covers backward ONLY.
+  Exact r16 source patch against8560e32:artifacts/s4/continue13-r16-source.patch;
+  reconstructed eight source hashes verified against the bound report.
+- policy-continue13-stable-swiglu-{0,update-10}:r17, committedacc99aa.
+  Both numerical gates pass exactly; ONE measured step544.0041401659837s,
+  finite norm/delta and changed exact-roundtrip v1, but swap+1345.19 MiB
+  FAILS. Driver26799194112 within budget does not excuse swap growth.
+  status=updated-exported-memory-blocked. NEVER use its v1 for feedback.
+  This is an independent one-step attempt from v0, not step2 in r18's chain.
+  r17/r18 adapter hashes happen to be EXACTLY identical; provenance still
+  distinguishes their memory-blocked and qualified export directories.
+- All continue12 timeout/swap failures and r14/r15 original /0 numerical
+  failures remain under artifacts/s4. r14 MAE0.010698827859248567 and r15
+  MAE0.011031304884397384 >0.01; neither fusion is promoted.
+- Historical /0 MAE0.01112226647 and unaligned0.1077/0.1025 remain failures.
+  Production paged/prefix0.00000123694609 is a reference ONLY.
+
+Final validation:
+- 191 tests pass in13.07s; one existing inspection-only selective-checkpoint
+  saved_tensors_hooks FutureWarning. No tests skipped to pass gates.
+  artifacts/s4/continue13-final-tests.log
+- Targeted Ruff and git diff --check pass.
+- artifacts/s4/continue13-final-bindings.json: current native/probe hashes,
+  all three numerical reports, complete-group evidence, immutable v0/v1
+  inference/training/adapter files and captured served-v1 catalog verify.
+- No source edits during source-bound probes. Hashes remain valid after
+  code commits; documentation-only closeout does not change bound source.
+
+Reproduce with FRESH outputs only (repo root):
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.0
+export PYTORCH_MPS_LOW_WATERMARK_RATIO=0.9
+OUT=artifacts/s4/policy-continue14-NEW-0
+mkdir "$OUT"
+cp artifacts/s4/policy-aligned/policy-v0.json "$OUT/policy-v0.json"
+ln -s "$PWD/artifacts/s4/policy-aligned/adapter-v0" "$OUT/adapter-v0"
+uv run --no-project --python .venv/bin/python python scripts/probe_s4_training.py preflight \
+ --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+ --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+ --output "$OUT" --group artifacts/s4/policy-sampled-0 --aligned-arithmetic
+Whole /10: another fresh OUT, same v0 setup, phase update and
+--group artifacts/s4/policy-continue10-10. NEVER reuse immutable v1 outputs.
+Native-v1: fresh OUT with copied qualified policy-v1.json and symlink to its
+adapter-v1; phase preflight --policy-version 1 --aligned-arithmetic, using the
+fresh policy-continue13-v1-10 group; API AND engine must be stopped first.
+Tests: uv run --no-project --python .venv/bin/python python -m pytest -q
+
+Next work, in order:
+1. Preserve this qualified v1 and all failed artifacts. Requested bounded S4
+   training/feedback work is complete; do not silently start another GRPO run.
+2. Any future native/probe change must requalify original /0 AND WHOLE /10;
+   requalify fresh version-bound feedback as needed. Never edit bound source
+   during a probe or use the homogeneous fresh v1 group for an update.
+3. Agree a separate next-stage scope (for example S5) before new sampling or
+   policy chains. Long-context/co-resident/multi-hour claims need new evidence.
+4. Continue on same PR branch; no merge or force-push without explicit request.
+
+Process/storage constraints:
+All owned native/production/proxy processes have exited; port8000 has no
+listener. Unrelated Quant RSI/QuantDinger and other processes are untouched.
+No OrbStack quit, remount, sudo or passwords. Caches/models/raw evidence stay
+ignored and repo-local on /Volumes/workspace. No weights, hidden tests, task
+solutions or raw sessions committed. No multi-hour GRPO was started.

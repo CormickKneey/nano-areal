@@ -39,6 +39,12 @@ class Trajectory:
     turns: list[dict] = field(default_factory=list)
     # Per-turn rewards (before discount)
     turn_rewards: list[float] = field(default_factory=list)
+    # True when the rollout hit max tokens. Those rewards are forced to 0.
+    truncated: bool = False
+    group_id: str | None = None
+    old_log_probs: Tensor | None = None
+    pixel_values: Tensor | None = None
+    image_grid_thw: Tensor | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -52,45 +58,23 @@ def grpo_loss(
     masks: Tensor,           # [B, T] — response token mask
     clip_eps: float = 0.2,
     kl_coef: float = 0.01,
+    old_log_probs: Tensor | None = None,
+    group_ids: list[str] | None = None,
 ) -> tuple[Tensor, dict]:
-    """
-    GRPO objective with PPO-clip and KL penalty.
+    """GRPO. Other surrogates live in ``nano_areal.archon.losses``."""
+    from nano_areal.archon.losses import compute_policy_loss
 
-    Within each group (same problem, G trajectories), advantages are
-    computed by group-normalizing rewards.
-    """
-    B = rewards.shape[0]
-
-    # Group-normalize rewards → advantages
-    # Assume the batch is already one full group or multiple groups of equal size.
-    # For simplicity, normalize over the entire batch.
-    advantages = (rewards - rewards.mean()) / (rewards.std() + 1e-8)  # [B]
-    advantages = advantages.detach()
-
-    # Per-token importance ratio
-    ratio = (log_probs - ref_log_probs).exp()  # [B, T]
-
-    # PPO-clip
-    adv_expanded = advantages.unsqueeze(1)  # [B, 1] → broadcasts over T
-    pg_loss1 = -ratio * adv_expanded
-    pg_loss2 = -ratio.clamp(1 - clip_eps, 1 + clip_eps) * adv_expanded
-    pg_loss = torch.max(pg_loss1, pg_loss2)  # [B, T]
-
-    # KL penalty (forward KL: current || ref)
-    kl = (log_probs - ref_log_probs) * masks  # [B, T]
-
-    # Mask and reduce
-    n_tokens = masks.sum()
-    loss = ((pg_loss + kl_coef * kl) * masks).sum() / n_tokens.clamp(min=1)
-
-    stats = {
-        "loss": loss.item(),
-        "kl": (kl.sum() / n_tokens.clamp(min=1)).item(),
-        "reward_mean": rewards.mean().item(),
-        "reward_std": rewards.std().item(),
-        "ratio_mean": (ratio * masks).sum().item() / n_tokens.clamp(min=1).item(),
-    }
-    return loss, stats
+    return compute_policy_loss(
+        "grpo",
+        log_probs,
+        ref_log_probs,
+        rewards,
+        masks,
+        clip_eps=clip_eps,
+        kl_coef=kl_coef,
+        old_log_probs=old_log_probs,
+        group_ids=group_ids,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +221,8 @@ class ArchonTrainer:
     # ------------------------------------------------------------------
 
     def train_step(self, trajectories: list[Trajectory]) -> dict:
+        if any(trajectory.pixel_values is not None for trajectory in trajectories):
+            raise ValueError("Use NativeQwen3VLLoRATrainer for image trajectories")
         self.model.train()
 
         # Tokenize & pad
@@ -248,7 +234,7 @@ class ArchonTrainer:
 
         input_ids, response_mask = self._pad_batch(seqs, masks)
         rewards = torch.tensor(
-            [t.reward for t in trajectories],
+            [0.0 if t.truncated else t.reward for t in trajectories],
             dtype=torch.float32,
             device=self.device,
         )
@@ -259,14 +245,42 @@ class ArchonTrainer:
 
         log_probs = self._compute_policy_log_probs(input_ids, response_mask)
 
-        loss, stats = grpo_loss(
+        from nano_areal.archon.losses import compute_policy_loss
+
+        group_ids = [trajectory.group_id for trajectory in trajectories]
+        if any(group_id is not None for group_id in group_ids):
+            if any(group_id is None for group_id in group_ids):
+                raise ValueError("Cannot mix grouped and ungrouped trajectories")
+        else:
+            group_ids = None
+        behavior = [trajectory.old_log_probs for trajectory in trajectories]
+        old_log_probs = None
+        if any(value is not None for value in behavior):
+            if any(value is None for value in behavior):
+                raise ValueError("Cannot mix captured and missing behavior logprobs")
+            padded_behavior = []
+            for values, sequence in zip(behavior, seqs):
+                if values.shape != sequence.shape:
+                    raise ValueError("Behavior logprobs must align with input_ids")
+                padded_behavior.append(
+                    F.pad(values.to(self.device),
+                          (0, input_ids.shape[1] - values.shape[0]))
+                )
+            old_log_probs = torch.stack(padded_behavior)[:, 1:]
+
+        loss, stats = compute_policy_loss(
+            getattr(self.config, "loss", "grpo"),
             log_probs=log_probs,
             ref_log_probs=ref_log_probs,
             rewards=rewards,
             masks=response_mask[:, 1:],
             clip_eps=self.config.clip_eps,
             kl_coef=self.config.kl_coef,
+            group_size=getattr(self.config, "group_size", None),
+            old_log_probs=old_log_probs,
+            group_ids=group_ids,
         )
+        stats["truncated"] = sum(1 for t in trajectories if t.truncated)
 
         # Gradient accumulation
         loss = loss / self.config.grad_accum_steps

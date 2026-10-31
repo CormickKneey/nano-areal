@@ -19,11 +19,13 @@ import os
 import signal
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import torch
 
 from nano_areal.agent.bfcl import BFCLAgent
+from nano_areal.agent.dsh import DshAgent
 from nano_areal.archon.model import Qwen35Args, build_model
 from nano_areal.archon.state_dict import Qwen35StateDictAdapter, load_hf_weights
 from nano_areal.archon.trainer import ArchonTrainer, Trajectory
@@ -71,6 +73,8 @@ async def rollout_worker(
             break
 
         sample = batch[0]
+        group_id = uuid.uuid4().hex
+        rollout_version = engine.current_version
 
         # Run G episodes concurrently for the same sample
         tasks = [workflow.arun_episode(sample) for _ in range(group_size)]
@@ -90,7 +94,12 @@ async def rollout_worker(
                     input_ids=tt.input_ids,
                     response_mask=tt.response_mask,
                     reward=tt.reward,
-                    policy_version=engine.current_version,
+                    truncated=tt.truncated,
+                    policy_version=rollout_version,
+                    group_id=group_id,
+                    old_log_probs=tt.logprobs,
+                    pixel_values=tt.pixel_values,
+                    image_grid_thw=tt.image_grid_thw,
                 )
                 await buffer.put(traj)
 
@@ -176,6 +185,13 @@ async def train_worker(
 # ---------------------------------------------------------------------------
 
 async def main_async(config: NanoArealConfig, model_source: str = "modelscope"):
+    if config.agent == "dsh" and config.backend == "metal":
+        raise NotImplementedError(
+            "The custom archon Qwen3-VL port is not ready. Run the real MLX / "
+            "HF-LoRA fallback with: PYTHONPATH=. .venv/bin/python "
+            "scripts/run_agentic_rl.py --backend metal --sync --agent dsh "
+            "--loss grpo --steps 1"
+        )
     # ------------------------------------------------------------------
     # Build components
     # ------------------------------------------------------------------
@@ -219,13 +235,20 @@ async def main_async(config: NanoArealConfig, model_source: str = "modelscope"):
     # Tokenizer is held by the proxy server, not the agent
     engine = RolloutEngine(config.model, config.rollout, tokenizer=tokenizer)
 
-    # Agent: pure OpenAI SDK, no AReaL internals
-    agent = BFCLAgent(
-        max_turns=config.rollout.max_turns,
-        temperature=config.rollout.temperature,
-        top_p=config.rollout.top_p,
-        max_tokens=config.rollout.max_new_tokens,
-    )
+    # Agents stay black boxes. BFCL is the v0.1 default; dsh is the v0.2 path.
+    if config.agent == "dsh":
+        agent = DshAgent(
+            model_name=config.model.infer_model_name or config.model.model_name,
+            context_window_tokens=config.model.max_model_len,
+            max_output_tokens=config.rollout.max_new_tokens,
+        )
+    else:
+        agent = BFCLAgent(
+            max_turns=config.rollout.max_turns,
+            temperature=config.rollout.temperature,
+            top_p=config.rollout.top_p,
+            max_tokens=config.rollout.max_new_tokens,
+        )
 
     # Async buffer
     buffer = AsyncTrajectoryBuffer(
@@ -342,6 +365,16 @@ def _resolve_model_path(model_name: str, source: str = "modelscope") -> str:
 def parse_args():
     parser = argparse.ArgumentParser(description="nano-areal: async agentic RL for LLMs")
     parser.add_argument("--sync", action="store_true", help="Run in sync mode (macOS/single GPU)")
+    parser.add_argument("--backend", choices=["metal", "cuda"], default=None,
+                        help="metal: vllm-metal + MPS sync. cuda: vLLM + CUDA. "
+                             "Default follows --sync (metal) or two-GPU async (cuda).")
+    parser.add_argument("--agent", choices=["bfcl", "dsh"], default="bfcl",
+                        help="bfcl keeps the v0.1 loop. dsh is the v0.2 black-box agent.")
+    parser.add_argument("--loss", choices=["grpo", "cispo", "gspo", "drgrpo"], default="grpo")
+    parser.add_argument("--infer-model", default=None,
+                        help="Rollout checkpoint. Defaults to --model / --train-model.")
+    parser.add_argument("--train-model", default=None,
+                        help="Training checkpoint. Defaults to --model.")
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B",
                         help="Model ID (ModelScope / HuggingFace) or local directory")
     parser.add_argument("--model-path", default=None,
@@ -353,7 +386,8 @@ def parse_args():
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-6)
-    parser.add_argument("--max-offpolicy", type=int, default=4)
+    parser.add_argument("--max-offpolicy", type=int, default=None,
+                        help="Override the version gap; Metal/sync requires 0.")
     parser.add_argument("--log-dir", default="logs")
     parser.add_argument("--save-dir", default="checkpoints")
     parser.add_argument(
@@ -366,19 +400,37 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if args.sync:
+    backend = args.backend or ("metal" if args.sync else "cuda")
+    if backend == "metal":
         config = NanoArealConfig.for_macos()
+    elif args.sync:
+        config = NanoArealConfig.for_macos()
+        config.backend = "cuda"
+        config.model.device = "cuda"
+        config.rollout.inference_backend = "cuda"
     else:
         config = NanoArealConfig.for_two_gpus()
+    config.backend = backend
+    config.rollout.inference_backend = backend
+    config.agent = args.agent
+    config.train.loss = args.loss
 
-    effective_model = args.model_path or args.model
-    config.model.model_name = effective_model
-    config.model.tokenizer_name = effective_model
+    train_model = args.model_path or args.train_model or args.model
+    infer_model = args.infer_model or train_model
+    config.model.model_name = train_model
+    config.model.infer_model_name = infer_model
+    config.model.tokenizer_name = train_model
     config.train.total_steps = args.steps
     config.rollout.group_size = args.group_size
+    config.train.group_size = args.group_size
     config.train.batch_size = args.batch_size
     config.train.lr = args.lr
-    config.async_rl.max_head_offpolicyness = args.max_offpolicy
+    if args.max_offpolicy is not None:
+        if args.max_offpolicy < 0 or (config.mode == "sync" and args.max_offpolicy != 0):
+            raise SystemExit(
+                "--sync requires --max-offpolicy 0; gaps must be non-negative"
+            )
+        config.async_rl.max_head_offpolicyness = args.max_offpolicy
     config.log_dir = args.log_dir
     config.save_dir = args.save_dir
     if args.bfcl_data_dir:

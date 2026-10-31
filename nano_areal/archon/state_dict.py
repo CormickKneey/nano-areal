@@ -174,3 +174,60 @@ def load_hf_weights(model, checkpoint_path: str | Path, device="cpu"):
         warnings.warn(f"Missing keys when loading weights: {missing[:5]}")
 
     return model
+
+
+def qwen3vl_hf_key(key: str) -> str:
+    if key.startswith("model.language_model."):
+        return key.removeprefix("model.").replace(".self_attn.", ".attn.")
+    if key.startswith("model.visual."):
+        return key.removeprefix("model.")
+    if key == "lm_head.weight":
+        return key
+    raise ValueError(f"Unmapped Qwen3-VL checkpoint key: {key}")
+
+
+def qwen3vl_archon_key(key: str) -> str:
+    if key.startswith("language_model."):
+        return "model." + key.replace(".attn.", ".self_attn.")
+    if key.startswith("visual."):
+        return "model." + key
+    if key == "lm_head.weight":
+        return key
+    raise ValueError(f"Unmapped native Qwen3-VL key: {key}")
+
+
+def load_qwen3vl_weights(model, checkpoint_path, device, dtype):
+    from safetensors import safe_open
+
+    path = Path(checkpoint_path)
+    index = path / "model.safetensors.index.json"
+    if index.exists():
+        import json
+
+        shards = sorted(set(json.loads(index.read_text())["weight_map"].values()))
+    else:
+        shards = ["model.safetensors"]
+    expected_state = model.state_dict()
+    expected = set(expected_state)
+    seen = set()
+    for shard in shards:
+        with safe_open(str(path / shard), framework="pt", device="cpu") as weights:
+            state = {}
+            for key in weights.keys():
+                mapped = qwen3vl_hf_key(key)
+                if mapped == "lm_head.weight" and model.tied:
+                    continue
+                if mapped not in expected or mapped in seen:
+                    raise ValueError(f"Unexpected or duplicate checkpoint key: {key}")
+                tensor = weights.get_tensor(key)
+                if tensor.shape != expected_state[mapped].shape:
+                    raise ValueError(f"Checkpoint shape mismatch: {key}")
+                state[mapped] = tensor.to(device=device, dtype=dtype)
+                seen.add(mapped)
+            model.load_state_dict(state, strict=False, assign=True)
+    missing = expected - seen
+    if missing:
+        raise ValueError(f"Missing Qwen3-VL checkpoint keys: {sorted(missing)}")
+    if any(parameter.is_meta for parameter in model.parameters()):
+        raise ValueError("Checkpoint left meta parameters uninitialized")
+    return model

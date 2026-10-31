@@ -13,3 +13,8 @@ node_modules
 .vscode*
 *__pycache__*
 .venv
+.s1-cache/
+artifacts/s1/
+artifacts/s2/
+artifacts/s3/
+artifacts/s4/

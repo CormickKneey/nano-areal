@@ -97,7 +97,7 @@ class AsyncTrajectoryBuffer:
                 continue
 
             version_gap = self._current_policy_version - traj.policy_version
-            if self.max_head_offpolicyness > 0 and version_gap > self.max_head_offpolicyness:
+            if not 0 <= version_gap <= self.max_head_offpolicyness:
                 self.stats.total_discarded += 1
                 continue
 
@@ -112,15 +112,10 @@ class AsyncTrajectoryBuffer:
 
     async def get_batch_sync(self, n: int) -> list["Trajectory"]:
         """
-        Blocking collect for sync mode: waits until exactly n trajectories
-        are available regardless of version.
+        Collect exactly n trajectories using the same version filter as async.
+        With max_head_offpolicyness=0, only the current policy is accepted.
         """
-        batch = []
-        while len(batch) < n:
-            traj = await self._queue.get()
-            batch.append(traj)
-            self.stats.total_consumed += 1
-        return batch
+        return await self.get_batch(n, timeout=float("inf"))
 
     # ------------------------------------------------------------------
     # Inspection
