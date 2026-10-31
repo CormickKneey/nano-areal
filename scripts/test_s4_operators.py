@@ -18,6 +18,7 @@ from nano_areal.archon.s4_operators import (
     rounded_swiglu,
     splitk_prefill,
     splitkv_attention,
+    tokenwise_frozen_linear,
 )
 
 
@@ -61,6 +62,31 @@ def test_resident_affine_preserves_values_and_input_gradients():
     with pytest.raises(ValueError, match="matching fp32"):
         affine_decode_weights(
             hidden, affine_weights(packed, scales, biases).half(), biases)
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_tokenwise_frozen_forward_and_batched_input_gradients(device):
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is required")
+    torch.manual_seed(83)
+    dtype = torch.float64 if device == "cpu" else torch.float32
+    hidden = torch.randn(1, 16, 128, device=device, dtype=dtype, requires_grad=True)
+    weight = torch.randn(256, 128, device=device, dtype=dtype)
+    gradient = torch.randn(1, 16, 256, device=device, dtype=dtype)
+    actual = tokenwise_frozen_linear(hidden, weight)
+    expected = torch.cat([torch.nn.functional.linear(
+        hidden[:, index:index + 1], weight) for index in range(16)], dim=1)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    actual.backward(gradient)
+    observed = hidden.grad.clone()
+    hidden.grad = None
+    expected.backward(gradient)
+    torch.testing.assert_close(observed, hidden.grad,
+                               rtol=1e-12 if device == "cpu" else 1e-4,
+                               atol=1e-12 if device == "cpu" else 1e-5)
+    assert not weight.requires_grad and bool(torch.isfinite(observed).all())
+    with pytest.raises(ValueError, match="frozen weights"):
+        tokenwise_frozen_linear(hidden, weight.requires_grad_())
 
 
 def test_splitkv_masks_future_partitions_and_has_finite_gradients():

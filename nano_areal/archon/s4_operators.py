@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+from torch.autograd.function import once_differentiable
 from torch.nn import functional as F
 
 
@@ -68,7 +69,28 @@ def affine_decode(hidden, packed, scales, biases):
     return affine_decode_weights(hidden, weights, biases)
 
 
-def affine_decode_weights(hidden, weights, biases):
+class _TokenwiseFrozenLinear(torch.autograd.Function):
+    @staticmethod
+    def forward(context, hidden, weight):
+        if hidden.ndim != 3 or hidden.shape[0] != 1 or weight.requires_grad:
+            raise ValueError("Tokenwise linear requires batch-one inputs "
+                             "and frozen weights")
+        context.save_for_backward(weight)
+        return torch.cat([F.linear(hidden[:, index:index + 1], weight)
+                          for index in range(hidden.shape[1])], dim=1)
+
+    @staticmethod
+    @once_differentiable
+    def backward(context, gradient):
+        weight, = context.saved_tensors
+        return F.linear(gradient, weight.T), None
+
+
+def tokenwise_frozen_linear(hidden, weight):
+    return _TokenwiseFrozenLinear.apply(hidden, weight)
+
+
+def affine_decode_weights(hidden, weights, biases, *, linear=F.linear):
     if (hidden.dtype != torch.bfloat16 or weights.dtype != torch.float32
             or hidden.shape[-1] != weights.shape[-1]
             or biases.shape != (weights.shape[0], weights.shape[1] // 64)):
@@ -76,7 +98,7 @@ def affine_decode_weights(hidden, weights, biases):
     grouped = hidden.reshape(*hidden.shape[:-1], -1, 16, 4)
     rounded = ((grouped[..., 0] + grouped[..., 1]) + grouped[..., 2]) + grouped[..., 3]
     correction = (rounded.float() - grouped.float().sum(-1)).sum(-1)
-    result = F.linear(hidden.float(), weights) + F.linear(correction, biases.float())
+    result = linear(hidden.float(), weights) + linear(correction, biases.float())
     return result.to(hidden.dtype)
 
 

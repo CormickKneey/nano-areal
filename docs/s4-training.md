@@ -62,8 +62,75 @@ No captured production score is used as a differentiable reference.
 Per-turn update snapshots now include elapsed update-phase time. **169 tests
 pass in 9.48 seconds**; targeted Ruff and diff checks pass. A selective
 checkpoint/saved-tensor-hooks compatibility warning is confined to the
-storage-inspection test. The r6 source-bound numerical/update probes are
-pending; no S4 training or memory acceptance follows from these changes.
+storage-inspection test.
+
+The r6 original /0 confirmation again reproduces exactly **MAE
+0.009696634512675821**, **187.14005770799122 seconds**
+(`policy-continue12-selective-0/preflight.json`). Its bounded whole /10 run
+independently reproduces exactly **0.007422680729897122**, then completes all
+**nine differentiable forwards** in **481.54610141698504 seconds** of its
+update phase. It times out during the single group backward at the unchanged
+**600-second** limit. Final status **error**, **Updates = 0**, total elapsed
+**980.7099036249856 seconds**; cleanup also OOMs, with both errors retained.
+
+The **8708** valid samples record allocated peak **25,265,392,896** and driver
+peak **26,788,708,352 <= 26,800,603,136 bytes**. Swap grows **4712.50 ->
+9215.19 MiB**, **+4502.69 MiB**: the partial memory gate **fails**. Retaining
+MLP products increases pressure and does not qualify complete backward,
+optimizer or export. No immutable v1 or feedback exists from r5/r6.
+
+### r7 bounded row batching, without retained MLP products
+
+The next native schedule batches up to **16 causal decode rows** through
+each layer, retaining the affine bias-rounding formula, Metal RMS, rounded
+SwiGLU and bf16 Split-KV partition arithmetic. Its query offset is the full
+KV length minus the query-row count; future response tokens remain causally
+masked. The head still scores one token at a time. This changes projection
+GEMM shapes, so previous numerical acceptance is not inherited: original
+/0 and whole /10 must be remeasured under the same **0.01** bound.
+
+MLP selective retention is **disabled** in this native schedule; its diagnostic
+implementation and storage tests remain available. Complete prefix/KV
+autograd, whole-group episode weighting, one backward, exact-zero reference
+identity and **600-second** phase limits remain unchanged. The operator
+revision **native-s4-affine-cache-r7** is not adapter v1. **171 tests pass in
+9.55 seconds**, with no warnings; targeted Ruff and diff checks pass.
+FP32 shared/batched versus independent sequential complete-history gradients
+use the original **rtol 1e-4 / atol 1e-5**. The native checkpoint control uses
+the same batched schedule without checkpointing, preserving its original
+**rtol 1/128 / atol 1e-5**.
+
+The r7 original /0 numerical probe **fails**, **MAE
+0.010030500258761312 > 0.01**, **56.922539166000206 seconds**
+(`policy-continue12-batched-0`). Tokenwise causal attention with batched
+projections, r8, also **fails**, **0.011196943518213669**, **84.74214708298678
+seconds** (`policy-continue12-row-attention-0`). Four-row full batching, r9,
+**fails**, **0.0113531636021469**, **85.14666100000613 seconds**
+(`policy-continue12-batched4-0`). No update is attempted on these operators;
+all nine turns / 636 tokens and original rewards remain intact. Source patches
+against `7685e5d` are retained as `continue12-r7/r8/r9-source.patch` under
+`artifacts/s4/`; no failed measurement is relabeled as accepted.
+
+### r10 tokenwise forward, batched frozen-linear input gradients
+
+The next schedule preserves each frozen decode projection's original
+**one-token forward**, including its affine correction, and each token's
+causal Split-KV attention and head. Only the frozen linear input-gradient
+matrix multiplication is batched over the checkpoint's up-to-16 rows.
+This is the ordinary linear derivative; weights remain frozen. A first-order
+custom autograd function saves the weight, not historical KV, and passes input
+gradients to the complete shared history. Elementwise normalization, RoPE and
+SwiGLU operate on the row group; layer products are recomputed, not retained.
+
+CPU float64 tests check exact tokenwise forward equality and derivatives at
+**rtol/atol 1e-12**; MPS float32 uses **rtol 1e-4 / atol 1e-5**. Complete-group
+causal-gradient tests and native checkpoint controls remain. **177 tests pass
+in 10.53 seconds**, targeted Ruff and diff checks pass. The operator revision
+**native-s4-affine-cache-r10** is not adapter v1. Its source-bound original
+/0 preflight reproduces exactly **MAE 0.009696634512675821 <= 0.01**, all
+**9 turns / 636 tokens**, in **170.7715755419922 seconds**
+(`policy-continue12-tokenwise-0/preflight.json`). Whole /10 qualification and
+a measured complete update are pending.
 
 ## Continue11: persistent differentiable KV blocks
 

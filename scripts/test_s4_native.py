@@ -81,7 +81,8 @@ def test_bound_native_checkpoint_cache_has_complete_history_gradients():
             expected = cached_text_logprobs(
                 trainer.model, trajectory, project_head=runtime.project_head,
                 state=state, attention_kernel=runtime.attention,
-                activate_segment=runtime.activate_segment, score_response=index == 1)
+                activate_segment=runtime.activate_segment, score_response=index == 1,
+                decode_chunk_size=16, batch_decode=True)
         expected.sum().backward()
         for name, parameter in trainer.parameters.items():
             assert bool(torch.isfinite(checkpoint_gradients[name]).all())
@@ -225,7 +226,13 @@ def test_selective_replay_retains_only_bounded_decode_mlp_products(monkeypatch):
     monkeypatch.setattr(s4_replay, "create_selective_checkpoint_contexts", contexts)
     try:
         trainer.model.train()
-        currents = trainer.response_group_logprobs(runtime.history)
+        state = {}
+        currents = [cached_text_logprobs(
+            trainer.model, trajectory, state=state,
+            project_head=runtime.project_head, attention_kernel=runtime.attention,
+            activate_segment=runtime.activate_segment, checkpoint_layers=True,
+            checkpoint_head=True, decode_chunk_size=16, retain_decode_mlp=True)
+            for trajectory in runtime.history]
         assert len(retained) == 24
         assert sum(retained) == 20480
         sum(current.sum() for current in currents).backward()

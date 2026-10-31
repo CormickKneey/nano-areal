@@ -173,7 +173,11 @@ def test_cache_block_prefix_keeps_original_autograd_and_deep_history():
 
 
 @pytest.mark.parametrize("retain_mlp", [False, True])
-def test_shared_group_backward_matches_independent_complete_history_in_fp32(retain_mlp):
+@pytest.mark.parametrize("batch_decode", [False, True])
+@pytest.mark.parametrize("chunk_size", [4, 16])
+def test_shared_group_backward_matches_independent_complete_history_in_fp32(
+    retain_mlp, batch_decode, chunk_size,
+):
     torch.manual_seed(53)
     model = Qwen3VLModel(tiny_config().to_dict()).float().train()
     add_lora(model)
@@ -199,10 +203,12 @@ def test_shared_group_backward_matches_independent_complete_history_in_fp32(reta
     for trajectory in trajectories:
         currents.append(cached_text_logprobs(
             model, trajectory, state=state, checkpoint_layers=True,
-            checkpoint_head=True, decode_chunk_size=16,
-            retain_decode_mlp=retain_mlp))
+            checkpoint_head=True, decode_chunk_size=chunk_size,
+            retain_decode_mlp=retain_mlp, batch_decode=batch_decode))
     for actual, reference in zip(currents, expected, strict=True):
-        torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+        torch.testing.assert_close(actual, reference,
+                                   rtol=1e-5 if batch_decode else 0,
+                                   atol=1e-5 if batch_decode else 0)
     sum(current.sum() * (index + 1)
         for index, current in enumerate(currents)).backward()
     for name, parameter in model.named_parameters():

@@ -21,6 +21,7 @@ from nano_areal.archon.s4_operators import (
     rounded_swiglu,
     splitk_prefill,
     splitkv_attention,
+    tokenwise_frozen_linear,
 )
 from nano_areal.archon.s4_replay import cached_text_logprobs
 from nano_areal.archon.s4_update import trajectory_from_turn
@@ -103,7 +104,8 @@ class AlignedS4Runtime:
                         if hidden.shape[-2] >= 16:
                             return splitk_prefill(hidden, weight)
                         raise ValueError("Unqualified short prefill below 16 rows")
-                    return affine_decode_weights(hidden, module.weight, biases)
+                    return affine_decode_weights(
+                        hidden, module.weight, biases, linear=tokenwise_frozen_linear)
 
                 module.forward = MethodType(forward, module)
             if isinstance(module, RMSNorm):
@@ -167,7 +169,12 @@ class AlignedS4Runtime:
         if self.prefill:
             return torch.nn.functional.scaled_dot_product_attention(
                 query.float(), key.float(), value.float(), **options).to(query.dtype)
-        return splitkv_attention(query, key, value, key.shape[-2] - 1)
+        offset = key.shape[-2] - query.shape[-2]
+        return torch.cat([
+            splitkv_attention(query[..., index:index + 1, :],
+                              key[..., :offset + index + 1, :],
+                              value[..., :offset + index + 1, :], offset + index)
+            for index in range(query.shape[-2])], dim=-2)
 
     def project_head(self, hidden, start, end):
         return affine_decode_weights(hidden, *self.head)
@@ -237,7 +244,7 @@ class AlignedS4Runtime:
                 activate_segment=self.activate_segment, checkpoint_layers=True,
                 score_response=index == self.index, decode_chunk_size=16,
                 checkpoint_head=True,
-                retain_decode_mlp=True,
+                batch_decode=True,
             )
         if differentiating and not self.group_replay:
             self.states.pop(enabled, None)
@@ -246,18 +253,20 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r6",
+        return {"name": "native-s4-affine-cache-r10",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
-                "selective_checkpoint": "Retain single-token MLP matrix products only",
+                "decode_rows": "Tokenwise frozen projections and causal attention; "
+                               "batch frozen-linear input gradients across 16 rows",
+                "selective_checkpoint": "Disabled; recompute layer products",
                 "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",
                 "gradients": "One whole-group backward through shared history; "
                              "no detached prefix KV; checkpointed token head; "
                              "persistent KV blocks, concatenate inside non-reentrant "
-                             "layer checkpoints; first-order Metal RMS",
+                             "layer checkpoints; first-order Metal RMS/frozen linear",
                 "scope": "Text-only declared group, prefill suffix >=16 rows",
                 "max_runtime_seconds_per_phase": 600}
 

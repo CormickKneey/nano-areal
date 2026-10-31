@@ -60,7 +60,7 @@ def cached_text_logprobs(
     observe=None,
     attention_kernel=None, activate_segment=None, checkpoint_layers=False,
     score_response=True, decode_chunk_size=1, checkpoint_head=False,
-    retain_decode_mlp=False,
+    retain_decode_mlp=False, batch_decode=False,
 ):
     if not 1 <= decode_chunk_size <= 16:
         raise ValueError("Decode checkpoint chunks must contain 1 to 16 tokens")
@@ -104,7 +104,7 @@ def cached_text_logprobs(
                     old_key = torch.cat(keys, dim=-2)
                     old_value = torch.cat(values, dim=-2)
                 outputs, new_keys, new_values = [], [], []
-                fragments = ([(0, end - start)] if end == prompt else
+                fragments = ([(0, end - start)] if end == prompt or batch_decode else
                              [(offset, offset + 1) for offset in range(end - start)])
                 for offset, stop in fragments:
                     fragment_start, fragment_end = start + offset, start + stop
