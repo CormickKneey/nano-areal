@@ -38,6 +38,30 @@ def test_shared_projection_uses_original_prefill_shape():
                                affine_decode(hidden, packed, scales, biases))
 
 
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_rounded_swiglu_saturated_gradients_preserve_forward(device):
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is required")
+    gate = torch.tensor([-100, -90, -50, -10, -1, 0, 1, 10, 50, 90, 100],
+                        device=device, dtype=torch.bfloat16, requires_grad=True)
+    up = torch.linspace(0.5, 1.5, gate.numel(), device=device,
+                        dtype=torch.bfloat16, requires_grad=True)
+    tail = 1 / (1 + torch.exp(gate.detach().abs()))
+    sigmoid = torch.where(gate.detach() < 0, tail, 1 - tail)
+    expected = (gate.detach() * sigmoid) * up.detach()
+    actual = rounded_swiglu(gate, up)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    actual.sum().backward()
+    reference_gate = gate.detach().cpu().double().requires_grad_()
+    reference_up = up.detach().cpu().double().requires_grad_()
+    (torch.nn.functional.silu(reference_gate) * reference_up).sum().backward()
+    for observed, reference in ((gate.grad, reference_gate.grad),
+                                (up.grad, reference_up.grad)):
+        assert bool(torch.isfinite(observed).all())
+        torch.testing.assert_close(observed.cpu().double(), reference,
+                                   rtol=1 / 64, atol=1e-6)
+
+
 def test_device_rope_config_contract():
     config = {"head_dim": 128, "rope_theta": 5000000}
     actual = device_rope_frequencies(config, "cpu")

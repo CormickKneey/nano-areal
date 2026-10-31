@@ -98,10 +98,14 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
         del group_loss, currents, references
     if time.monotonic() - started > max_seconds:
         raise TimeoutError("Bounded optimizer wall-clock limit exceeded")
-    if not all(parameter.grad is not None
-               and bool(torch.isfinite(parameter.grad).all())
-               for parameter in trainer.parameters.values()):
-        raise ValueError("Missing or nonfinite adapter gradients")
+    missing = [name for name, parameter in trainer.parameters.items()
+               if parameter.grad is None]
+    nonfinite = [name for name, parameter in trainer.parameters.items()
+                 if parameter.grad is not None
+                 and not bool(torch.isfinite(parameter.grad).all())]
+    if missing or nonfinite:
+        raise ValueError("Missing or nonfinite adapter gradients: "
+                         f"missing={missing}, nonfinite={nonfinite}")
     grad_norm = float(torch.nn.utils.clip_grad_norm_(
         list(trainer.parameters.values()), 1.0,
     ))

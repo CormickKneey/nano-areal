@@ -253,7 +253,8 @@ class AlignedS4Runtime:
                 checkpoint_head=True,
                 batch_decode=True,
                 retain_decode_mlp=True,
-                retained_mlp_projections=("gate_proj", "up_proj", "down_proj"),
+                retained_mlp_projections=("gate_proj", "down_proj"),
+                retain_decode_attention=True,
             )
         if differentiating and not self.group_replay:
             self.states.pop(enabled, None)
@@ -262,14 +263,15 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r13",
+        return {"name": "native-s4-affine-cache-r17",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
                                "batch frozen-linear/Split-KV gradients over 16 rows",
-                "selective_checkpoint": "Retain tokenwise MLP matrix products; "
-                                        "recompute attention and other projections",
+                "selective_checkpoint": "Retain tokenwise gate/down matrix products "
+                                        "and complete decode attention outputs; "
+                                        "recompute other projections",
                 "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",

@@ -306,6 +306,34 @@ def test_group_backward_recomputes_each_layer_segment_at_most_once():
         runtime.close()
 
 
+def test_selective_attention_reuses_outputs_without_replaying_forward(monkeypatch):
+    from nano_areal.archon import s4_operators
+
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    original = s4_operators.splitkv_attention
+    calls = []
+
+    def record(*arguments, **keywords):
+        calls.append(torch.is_grad_enabled())
+        return original(*arguments, **keywords)
+
+    monkeypatch.setattr(s4_operators, "splitkv_attention", record)
+    try:
+        trainer.model.train()
+        currents = trainer.response_group_logprobs(runtime.history)
+        forward_calls = calls.count(False)
+        assert forward_calls > 0
+        sum(current.sum() for current in currents).backward()
+        assert calls.count(False) == forward_calls
+        assert calls.count(True) > 0
+        assert all(parameter.grad is not None
+                   and bool(torch.isfinite(parameter.grad).all())
+                   for parameter in trainer.parameters.values())
+    finally:
+        runtime.close()
+
+
 def test_bound_runtime_renews_update_budget_only_after_full_preflight():
     trainer, quantized, episodes = aligned_fixture()
     runtime = AlignedS4Runtime(trainer, quantized, episodes)

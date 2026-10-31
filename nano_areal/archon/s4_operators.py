@@ -50,17 +50,24 @@ def splitkv_attention(query, key, value, query_offset, partition_size=512):
     return output.to(query.dtype)
 
 
+@torch.library.custom_op("nano_areal::tokenwise_splitkv_forward", mutates_args=())
+def tokenwise_splitkv_forward(
+    query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, query_offset: int,
+) -> torch.Tensor:
+    return torch.cat([
+        splitkv_attention(query[..., index:index + 1, :],
+                          key[..., :query_offset + index + 1, :],
+                          value[..., :query_offset + index + 1, :],
+                          query_offset + index)
+        for index in range(query.shape[-2])], dim=-2)
+
+
 class _TokenwiseSplitKV(torch.autograd.Function):
     @staticmethod
     def forward(context, query, key, value, query_offset):
         context.save_for_backward(query, key, value)
         context.query_offset = query_offset
-        return torch.cat([
-            splitkv_attention(query[..., index:index + 1, :],
-                              key[..., :query_offset + index + 1, :],
-                              value[..., :query_offset + index + 1, :],
-                              query_offset + index)
-            for index in range(query.shape[-2])], dim=-2)
+        return tokenwise_splitkv_forward(query, key, value, query_offset)
 
     @staticmethod
     @once_differentiable
@@ -165,9 +172,22 @@ def splitk_prefill(hidden, weight):
     return result
 
 
+class _RoundedSigmoid(torch.autograd.Function):
+    @staticmethod
+    def forward(context, gate):
+        tail = 1 / (1 + torch.exp(gate.abs()))
+        context.save_for_backward(tail)
+        return torch.where(gate < 0, tail, 1 - tail)
+
+    @staticmethod
+    @once_differentiable
+    def backward(context, gradient):
+        tail, = context.saved_tensors
+        return (gradient.float() * tail.float() * (1 - tail.float())).to(
+            gradient.dtype)
+
+
 def rounded_swiglu(gate, up):
     if gate.dtype != torch.bfloat16 or up.dtype != gate.dtype or up.shape != gate.shape:
         raise ValueError("Rounded SwiGLU requires matching bf16 gate and up tensors")
-    tail = 1 / (1 + torch.exp(gate.abs()))
-    sigmoid = torch.where(gate < 0, tail, 1 - tail)
-    return (gate * sigmoid) * up
+    return (gate * _RoundedSigmoid.apply(gate)) * up
