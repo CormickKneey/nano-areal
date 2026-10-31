@@ -8,7 +8,7 @@ from test_archon_parity import tiny_config
 
 from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
 from nano_areal.archon.s4_native import AlignedS4Runtime
-from nano_areal.archon.s4_operators import affine_weights
+from nano_areal.archon.s4_operators import affine_decode_weights, affine_weights
 from nano_areal.archon.s4_replay import cached_text_logprobs
 
 
@@ -95,6 +95,39 @@ def test_bound_runtime_rejects_incomplete_projection_coverage():
     with pytest.raises(ValueError, match="coverage differs"):
         AlignedS4Runtime(trainer, quantized, episodes)
     assert not hasattr(trainer, "select_turn")
+
+
+def test_bound_head_shares_fp32_bias_storage_across_differentiable_tokens():
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        weights, biases = runtime.head
+        assert biases.dtype == torch.float32 and not biases.requires_grad
+        hidden = torch.randn(1, 1, weights.shape[-1], device="mps",
+                             dtype=torch.bfloat16, requires_grad=True)
+        saved_biases = []
+
+        def pack(tensor):
+            if tensor.shape in (biases.shape, biases.T.shape):
+                saved_biases.append(tensor.untyped_storage().data_ptr())
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            current = sum(runtime.project_head(hidden, index, index + 1)
+                          for index in range(3))
+        assert len(saved_biases) == 3
+        assert set(saved_biases) == {biases.untyped_storage().data_ptr()}
+        current.sum().backward()
+        gradient = hidden.grad.clone()
+        hidden.grad = None
+        original = quantized["language_model.embed_tokens"][2].to("mps")
+        expected = sum(affine_decode_weights(hidden, weights, original)
+                       for _ in range(3))
+        torch.testing.assert_close(current, expected, rtol=0, atol=0)
+        expected.sum().backward()
+        torch.testing.assert_close(gradient, hidden.grad, rtol=0, atol=0)
+    finally:
+        runtime.close()
 
 
 def test_bound_runtime_rejects_unselected_and_mismatched_turns():

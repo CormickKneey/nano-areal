@@ -129,7 +129,7 @@ class AlignedS4Runtime:
         device = model.language_model.embed_tokens.weight.device
         packed, scales, biases = [value.to(device)
                                   for value in quantized["language_model.embed_tokens"]]
-        self.head = affine_weights(packed, scales, biases), biases
+        self.head = affine_weights(packed, scales, biases), biases.float()
         if not torch.equal(self.head[0].bfloat16(),
                            model.language_model.embed_tokens.weight):
             raise ValueError("Bound affine head differs from the native embedding")
@@ -199,10 +199,11 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r2",
+        return {"name": "native-s4-affine-cache-r3",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
-                "storage": "Frozen fp32 affine base; bf16 activations; fp32 LoRA",
+                "storage": "Frozen fp32 affine base and shared head biases; "
+                           "bf16 activations; fp32 LoRA",
                 "gradients": "Recompute complete cache history, no detached prefix KV; "
                              "persistent KV blocks, concatenate inside non-reentrant "
                              "layer checkpoints; first-order Metal RMS",
