@@ -59,6 +59,8 @@ class AlignedS4Runtime:
         self.index = None
         self.started = time.monotonic()
         self.prefill = True
+        self.segment_calls = 0
+        self.last_segment = None
         self.states = {}
         self.group_replay = False
         self.handles = []
@@ -161,10 +163,16 @@ class AlignedS4Runtime:
                 "Complete the full preflight before starting the update budget"
             )
         self.states.clear()
+        self.segment_calls = 0
+        self.last_segment = None
         self.started = time.monotonic()
 
     def activate_segment(self, start, end, prompt):
-        if time.monotonic() - self.started > 600:
+        elapsed = time.monotonic() - self.started
+        self.segment_calls += 1
+        self.last_segment = {"start": start, "end": end, "prompt": prompt,
+                             "elapsed_seconds": elapsed}
+        if elapsed > 600:
             raise TimeoutError("Aligned replay exceeded its 600-second runtime budget")
         self.prefill = end == prompt
 
@@ -245,7 +253,7 @@ class AlignedS4Runtime:
                 checkpoint_head=True,
                 batch_decode=True,
                 retain_decode_mlp=True,
-                retained_mlp_projections=("gate_proj", "down_proj"),
+                retained_mlp_projections=("gate_proj", "up_proj", "down_proj"),
             )
         if differentiating and not self.group_replay:
             self.states.pop(enabled, None)
@@ -254,14 +262,14 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r12",
+        return {"name": "native-s4-affine-cache-r13",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
                                "batch frozen-linear/Split-KV gradients over 16 rows",
-                "selective_checkpoint": "Retain tokenwise gate/down matrix products; "
-                                        "recompute up, attention and other projections",
+                "selective_checkpoint": "Retain tokenwise MLP matrix products; "
+                                        "recompute attention and other projections",
                 "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",

@@ -310,6 +310,8 @@ def main():
                     report["phase_memory"].append({
                         "stage": stage, **memory_snapshot(os.getpid()),
                         "update_elapsed_seconds": time.monotonic() - update_started,
+                        "replay_segment_calls": getattr(
+                            aligned_runtime, "segment_calls", None),
                         "mps_allocated_bytes": torch.mps.current_allocated_memory(),
                         "mps_driver_bytes": torch.mps.driver_allocated_memory(),
                     })
@@ -362,6 +364,11 @@ def main():
         report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])
     except BaseException as error:
         report.update(status="error", error_type=type(error).__name__, error=str(error))
+        if aligned_runtime is not None:
+            report["replay_progress"] = {
+                "segment_calls": getattr(aligned_runtime, "segment_calls", None),
+                "last_segment": getattr(aligned_runtime, "last_segment", None),
+            }
         try:
             report["memory_after"] = memory_snapshot(os.getpid())
             report["memory_pressure_after"] = command_output(["memory_pressure", "-Q"])

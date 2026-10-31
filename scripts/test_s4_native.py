@@ -291,6 +291,21 @@ def test_bound_runtime_has_a_hard_segment_deadline():
         runtime.close()
 
 
+def test_group_backward_recomputes_each_layer_segment_at_most_once():
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        trainer.model.train()
+        currents = trainer.response_group_logprobs(runtime.history)
+        forward_calls = runtime.segment_calls
+        sum(current.sum() for current in currents).backward()
+        recomputations = runtime.segment_calls - forward_calls
+        assert forward_calls == 8
+        assert 0 < recomputations <= forward_calls
+    finally:
+        runtime.close()
+
+
 def test_bound_runtime_renews_update_budget_only_after_full_preflight():
     trainer, quantized, episodes = aligned_fixture()
     runtime = AlignedS4Runtime(trainer, quantized, episodes)

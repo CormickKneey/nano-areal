@@ -201,7 +201,39 @@ pass. **native-s4-affine-cache-r12** is an operator revision, not adapter v1.
 Its source-bound original /0 preflight exactly repeats **MAE
 0.009696634512675821 <= 0.01**, all **9 turns / 636 tokens**, in
 **168.68390029200236 seconds** (`policy-continue12-retained-0/preflight.json`);
-native/probe hashes verify. Whole /10 and bounded update measurement is pending.
+native/probe hashes verify.
+
+The r12 whole /10 update repeats exactly **MAE 0.007422680729897122** and
+completes all nine differentiable forwards in **351.8809766249906 seconds**.
+The single group backward still reaches the unchanged **600-second** limit.
+Final **status=error**, **Updates = 0**, elapsed **932.4198641660041 seconds**;
+cleanup succeeds. The **8544** valid samples record allocated peak
+**22,076,385,536**, driver **26,778,222,592 <= 26,800,603,136 bytes**, RSS
+high-water **1,542,455,296 bytes**. Swap falls **4671.12 -> 3971.06 MiB**,
+**-700.06 MiB**. This partial memory pass does not qualify full backward,
+optimizer or export, which have not completed.
+
+### r13 full MLP retention with the compact attention graph
+
+The next operator retains all three frozen decode MLP matrix products,
+including up, to remove the remaining large MLP matrix recomputation. Unlike
+r6, it retains r11's compact tokenwise attention forward/batched full-KV
+backward and batched frozen-linear gradients. The extra activation storage
+must pass the same measured device/no-swap gates; no r6 memory failure is
+reinterpreted as acceptance.
+
+Segment counters and last-segment metadata now accompany update snapshots
+and primary-error reports. A tiny native group verifies each layer segment
+is recomputed at most once in its backward; observability remains optional
+when reporting a partially initialized runtime, preserving primary errors.
+**187 tests pass in 11.36 seconds**, with the same inspection-only checkpoint
+warning; targeted Ruff and diff checks pass. The operator revision
+**native-s4-affine-cache-r13** is not adapter v1.
+
+Its source-bound original /0 preflight exactly repeats **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 tokens**, in
+**168.36215929102036 seconds** (`policy-continue12-all-products-0`); native and
+probe source hashes verify. Whole /10 and bounded update measurement is pending.
 
 ## Continue11: persistent differentiable KV blocks
 
