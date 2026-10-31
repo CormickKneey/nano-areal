@@ -205,7 +205,13 @@ def test_bound_runtime_rejects_unselected_and_mismatched_turns():
         runtime.close()
 
 
-def test_selective_replay_retains_only_bounded_decode_mlp_products(monkeypatch):
+@pytest.mark.parametrize("projections,count,storage", [
+    (("gate_proj", "up_proj", "down_proj"), 24, 20480),
+    (("gate_proj", "down_proj"), 16, 12288),
+])
+def test_selective_replay_retains_only_bounded_decode_mlp_products(
+    monkeypatch, projections, count, storage,
+):
     trainer, quantized, episodes = aligned_fixture()
     runtime = AlignedS4Runtime(trainer, quantized, episodes)
     original = s4_replay.create_selective_checkpoint_contexts
@@ -231,12 +237,13 @@ def test_selective_replay_retains_only_bounded_decode_mlp_products(monkeypatch):
             trainer.model, trajectory, state=state,
             project_head=runtime.project_head, attention_kernel=runtime.attention,
             activate_segment=runtime.activate_segment, checkpoint_layers=True,
-            checkpoint_head=True, decode_chunk_size=16, retain_decode_mlp=True)
+            checkpoint_head=True, decode_chunk_size=16, retain_decode_mlp=True,
+            retained_mlp_projections=projections)
             for trajectory in runtime.history]
-        assert len(retained) == 24
-        assert sum(retained) == 20480
+        assert len(retained) == count
+        assert sum(retained) == storage
         sum(current.sum() for current in currents).backward()
-        assert len(retained) == 24
+        assert len(retained) == count
     finally:
         runtime.close()
 

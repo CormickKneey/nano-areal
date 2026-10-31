@@ -168,7 +168,40 @@ The source-bound original /0 confirmation exactly reproduces **MAE
 hashes verify. The earlier `policy-continue12-attention-0` run is retained as
 **invalid source-binding evidence**: a formatting edit after its source snapshot
 correctly triggers `Bound training arithmetic source changed`. Its result is
-not used for qualification. Whole /10 and bounded update measurement is pending.
+not used for qualification.
+
+The r11 bounded whole /10 probe exactly repeats **MAE 0.007422680729897122**,
+unchanged **[1,0] / [1,-1]**, then completes nine forwards in
+**313.41592937498353 seconds**. The single group backward still reaches the
+unchanged **600-second** deadline: final **status=error**, **Updates = 0**,
+elapsed **938.7167564170086 seconds**, cleanup succeeds. The **8565** valid
+samples record allocated peak **19,755,649,280**, driver peak
+**26,753,056,768 <= 26,800,603,136 bytes**, and process RSS high-water
+**1,457,192,960 bytes** (down from r10's **7,765,999,616**). Swap decreases
+**4474.00 -> 4108.06 MiB**, **-365.94 MiB**. This is a **partial-run** memory
+pass, not complete backward/optimizer/export qualification. The graph change
+reduces CPU memory substantially but does not yet close runtime acceptance.
+
+### r12 bounded gate/down product retention
+
+The next schedule retains only the frozen **gate and down** single-token MLP
+matrix products inside non-reentrant layer checkpoints. Weight storage identity
+selects those products on both CPU `aten.mm` and MPS `aten.linear`, excluding
+the up projection, affine bias corrections, attention and prefills. The tiny
+native storage control counts exactly **16 products / 12,288 bytes**, versus
+the retained full-MLP diagnostic's **24 / 20,480 bytes**. This reduces the
+extra activation-storage request relative to r6 while avoiding two expensive
+matrix replays per decoded layer. Full-history KV autograd and r11 tokenwise
+forward/batched-backward operators are unchanged. All numerical, device,
+no-swap and phase-runtime bounds remain unchanged.
+
+**186 tests pass in 13.44 seconds**, with the previously documented selective
+checkpoint/saved-tensor-hooks inspection warning; targeted Ruff and diff checks
+pass. **native-s4-affine-cache-r12** is an operator revision, not adapter v1.
+Its source-bound original /0 preflight exactly repeats **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 tokens**, in
+**168.68390029200236 seconds** (`policy-continue12-retained-0/preflight.json`);
+native/probe hashes verify. Whole /10 and bounded update measurement is pending.
 
 ## Continue11: persistent differentiable KV blocks
 

@@ -61,9 +61,12 @@ def cached_text_logprobs(
     attention_kernel=None, activate_segment=None, checkpoint_layers=False,
     score_response=True, decode_chunk_size=1, checkpoint_head=False,
     retain_decode_mlp=False, batch_decode=False,
+    retained_mlp_projections=("gate_proj", "up_proj", "down_proj"),
 ):
     if not 1 <= decode_chunk_size <= 16:
         raise ValueError("Decode checkpoint chunks must contain 1 to 16 tokens")
+    if not set(retained_mlp_projections) <= {"gate_proj", "up_proj", "down_proj"}:
+        raise ValueError("Unknown retained MLP projection")
     if trajectory.pixel_values is not None:
         raise ValueError("Cached diagnostic supports text only")
     ids = trajectory.input_ids
@@ -156,15 +159,17 @@ def cached_text_logprobs(
             if checkpoint_layers and model.training and torch.is_grad_enabled():
                 options = {}
                 if retain_decode_mlp and end != prompt:
-                    intermediate, width = layer.mlp.gate_proj.weight.shape
+                    retained_weights = {
+                        getattr(layer.mlp, name).weight.untyped_storage().data_ptr()
+                        for name in retained_mlp_projections}
 
-                    def policy(context, operation, *arguments, width=width,
-                               intermediate=intermediate, **keywords):
+                    def policy(context, operation, *arguments,
+                               retained_weights=retained_weights, **keywords):
                         if (operation in (torch.ops.aten.mm.default,
                                           torch.ops.aten.linear.default)
                                 and arguments[0].numel() == arguments[0].shape[-1]
-                                and arguments[1].shape in (
-                                    (width, intermediate), (intermediate, width))):
+                                and arguments[1].untyped_storage().data_ptr()
+                                in retained_weights):
                             return CheckpointPolicy.MUST_SAVE
                         return CheckpointPolicy.PREFER_RECOMPUTE
 
