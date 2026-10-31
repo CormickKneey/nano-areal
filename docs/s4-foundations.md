@@ -1,6 +1,29 @@
 # S4 dsh / nano-swe foundations: October 31, 2026
 
-## Status: bounded coding gate passes; training remains unaccepted
+## Status: bounded coding and one-step training/feedback gates pass
+
+Continue13 qualifies **native-s4-affine-cache-r18** (`acc99aa`, `1f89565`):
+unchanged source-bound original /0 **0.009696634512675821** and complete
+informative /10 **0.007422680729897122**, both **<= 0.01**. One complete-group
+backward and optimizer step finish in **541.8996607080044s <= 600s**, with
+finite/nonzero gradients, changed immutable v1 and exact PEFT roundtrip.
+Driver peak **25,527,287,808 <= 26,800,603,136 bytes**, swap **-416.0 MiB**:
+the complete update/export memory gate passes. No historical KV is detached.
+
+Only then, owned production serves that exact **s4-policy-v1-b60ac01c1b9c71ef**,
+collects fresh COMPLETE HumanEval/10 feedback **2/2** with exact reconciliation,
+and stops API/engine before native reload. Native-v1 parity passes at
+**0.008663687576587205 <= 0.01**, all **9 turns / 904 tokens**. Its expected
+blocked/exit-2 status reflects homogeneous rewards [1,1], not a numerical
+failure or another update. **Qualified chain Updates = 1**. An earlier r17
+one-step attempt fails swap and remains unaccepted; it is not a second step
+in the qualified chain. Scope is the measured bounded sequential cycle, not
+multi-hour GRPO, 8192-token training, co-residency or benchmark improvement.
+v0 sampling remains **36/81 / 45 failures**, separate v1 feedback **2/2**;
+combined engineering starts **38/83**. All failed starts remain retained.
+See [continue13 evidence](s4-training.md) and `.codex-s1-s4-last.txt`.
+
+### Historical continue12 boundary
 
 Continue12 replaces repeated per-turn backwards with complete-group shared
 autograd, token-head checkpoints, batched frozen-linear/full-KV attention

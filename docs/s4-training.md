@@ -1,37 +1,203 @@
 # S4 production policy preflight: October 31, 2026
 
-## Latest closeout: continue12, updates remain zero
+## Latest closeout: continue13, bounded training/feedback gates pass
 
-Committed runtime **native-s4-affine-cache-r13** shares a complete group's
-autograd history, performs one episode-balanced backward, checkpoints token
-heads, batches frozen-linear/full-KV attention gradients, and selectively
-retains frozen decode MLP products. Historical KV remains differentiable.
-Milestones: `8fac0a4`, `7685e5d`, `b1b6bf0`, `1604c0a`, `c681898`, `2c8e77f`.
-S1/S2/S3 and bounded coding acceptance remain unchanged.
+**One complete, memory-qualified S4 training/feedback cycle is now measured.**
+S1/S2/S3 and bounded coding acceptance remain unchanged. Qualified runtime
+**native-s4-affine-cache-r18** (`acc99aa`, `1f89565`) retains complete decode
+attention outputs, uses a finite rounded-sigmoid derivative and periodically
+releases unused MPS allocator cache. Forward arithmetic is unchanged; complete
+historical KV stays differentiable. No rejected r14/r15 fusion is promoted.
 
-Source-bound original /0 remains **0.009696634512675821 <= 0.01**;
-the unchanged informative whole /10 remains **0.007422680729897122 <= 0.01**,
-official rewards **[1,0]**, advantages **[1,-1]**, **9 turns / 1338 tokens**.
-The final qualified schedule completes all nine forwards in
-**358.38379254200845 seconds**, then reaches the unchanged **600-second**
-deadline during its single backward. Driver peak **26,786,611,200 bytes**
-is within **26,800,603,136**, but swap grows **123.44 MiB**: memory also fails.
-No complete backward, optimizer step, changed adapter, immutable v1 or v1
-feedback is qualified. **Full S4 training is NOT accepted; Updates = 0.**
+- Source-bound original /0 MAE **0.009696634512675821 <= 0.01**.
+- Source-bound informative whole /10 MAE **0.007422680729897122 <= 0.01**,
+  rewards **[1,0]**, advantages **[1,-1]**, **9 turns / 1338 tokens**.
+- One complete-group backward and optimizer step in **541.8996607080044s**,
+  within unchanged **600s**; finite/present gradients, nonzero norm/delta.
+- Immutable changed **v1**, exact PEFT roundtrip, bound parent/group hashes.
+- **7732** valid 100ms samples: driver peak **25,527,287,808 <=
+  26,800,603,136 bytes**, allocated **22,469,236,480**, swap **-416.0 MiB**.
+- Owned production serves **s4-policy-v1-b60ac01c1b9c71ef** and completes a
+  fresh fixed HumanEval/10 group **2/2**, **9 turns / 904 tokens**, exact dsh/
+  proxy reconciliation; API and engine both stop before native reload.
+- Fresh native `--policy-version 1` MAE **0.008663687576587205 <= 0.01**,
+  **231.79751437497907s**. Expected blocked/exit 2 is solely homogeneous
+  rewards **[1,1]**, not failed numerical parity or a second update.
 
-Faster r14/r15 native Metal attention experiments fail the original /0 gate
-and are not promoted. Their patches and reports remain under `artifacts/s4`;
-the working source is restored exactly to the qualified r13 commit. Sampling
-is unchanged at **36/81 successes, all 45 failures retained**; /20 and /54
-remain unstarted. No production server was launched in continue12. Remaining
-work is a numerically qualified complete-history schedule that finishes the
-backward, optimizer and export inside the existing runtime/device/no-swap
-bounds, followed by fresh production-v1 and native-v1 feedback.
+**Qualified chain Updates = 1.** An earlier r17 attempt also executes one
+step from the same v0 but fails swap growth; its immutable export and error
+remain evidence, not an accepted second step. r16 completes backward but
+fails gradients. All continue12 failures and the r16 source patch remain.
+v0 exploration stays **36/81 successes / 45 failures retained**; separate v1
+feedback is **2/2**, combined **38/83 engineering starts**, not benchmark
+accuracy or an improvement estimate. /20 and /54 remain unstarted.
 
-After restoring r13, the final full suite passes **187 tests in 12.72s**
-(one inspection-only selective-checkpoint warning). Current native/probe,
-original /0 and whole /10 evidence hashes and all immutable v0 model/adapter
-files verify (`artifacts/s4/continue12-final-bindings.json`).
+Final full suite: **191 tests pass in 13.07s**, with one existing
+inspection-only checkpoint warning; targeted Ruff and diff checks pass.
+Acceptance is limited to this bounded one-step fixed-group sequential cycle:
+no multi-hour GRPO, 8192-token training, co-residency or serving-device peak
+qualification is inferred. Final tests and immutable source/file bindings
+are recorded in `artifacts/s4/continue13-final-tests.log` and
+`artifacts/s4/continue13-final-bindings.json`. Owned probes/API/engine exit;
+port 8000 has no listener. No merge, force-push or unrelated process changes.
+
+## Continue13: retain complete decode attention outputs
+
+The opt-in **native-s4-affine-cache-r16** wraps the existing tokenwise
+Split-KV forward in an opaque native PyTorch custom operator. Its implementation
+still calls the exact qualified tokenwise formula, with the same causal slices,
+bf16 partition outputs and reduction order. This is not r14/r15 Metal fusion.
+Selective non-reentrant layer checkpoints retain only this operator's complete
+decode output, rather than replaying its many constituent operations during
+backward. The existing batched native Q/K/V derivative remains unchanged and
+receives the full differentiable historical cache. No KV is detached and no
+production-reference gradient is introduced.
+
+Frozen MLP retention returns to gate/down only, trading the up-product cache
+for smaller bf16 attention outputs. Prefills and vocabulary-sized token heads
+are not retained. The unchanged independent 600-second deadlines, allocation
+limits, 0.01 MAE bound, episode-balanced loss and no-swap gate still apply.
+A new native regression counts actual attention executions: backward must
+reuse the saved tokenwise forward outputs while still evaluating native
+full-history attention derivatives. Existing independent replay, causal input
+gradient and no-vocabulary-retention controls remain in the targeted suite:
+**62 tests pass in 10.14 seconds** (the existing inspection-only checkpoint
+warning). Targeted Ruff and diff checks pass.
+
+The source-bound original /0 probe exactly reproduces **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 response tokens**, in
+**170.0905404590012 seconds** (`policy-continue13-attention-cache-0`). Its
+overall blocked/exit-2 result is expected: rewards [1,1] imply zero advantages
+and must not unlock an update.
+
+Its complete whole /10 update preflight exactly repeats **MAE
+0.007422680729897122 <= 0.01**, rewards **[1,0]**, advantages **[1,-1]**,
+all **9 turns / 1338 tokens**. Nine differentiable forwards finish in
+**340.1560613750189 seconds**. For the first time, the single complete-group
+backward finishes inside the unchanged update budget: **580.2873166250065
+seconds**, **7056 segment entries = 3528 forward + 3528 recomputation**.
+The next strict gradient check fails with `Missing or nonfinite adapter
+gradients`, so **Updates = 0**, no optimizer/export/v1 feedback. The r16 error
+does not distinguish absent from nonfinite parameter gradients.
+
+Retained failure evidence is `policy-continue13-attention-cache-update-10`:
+elapsed **918.0748223330011 seconds**, **8405** valid 100ms samples, allocated
+peak **22,470,049,536**, driver **26,790,805,504 <= 26,800,603,136 bytes**,
+RSS high-water **1,066,811,392 bytes**, swap delta **-568.81 MiB**. Its memory
+pass covers the measured complete backward only, not an optimizer or export.
+
+### r17 finite rounded-sigmoid derivatives
+
+A separate CPU/MPS diagnostic demonstrates a latent numerical fault in the
+native rounded SwiGLU derivative: gate values +/-90 or +/-100 produce finite
+forward values but NaN gate gradients through `exp(abs(gate))`. This is a
+candidate explanation for the newly reachable r16 gradient failure, not a
+retrospective measurement of that failed run's individual gradients.
+
+**native-s4-affine-cache-r17** preserves the exact original rounded sigmoid
+forward and saves its small tail probability. Its first-order backward uses
+the algebraically stable `tail * (1 - tail)` derivative in fp32, avoiding the
+overflow-times-zero intermediate without replacing nonfinite gradients or
+detaching history. Saturated-value regressions require exact original forward
+outputs and finite gradients matching an independent fp64 SiLU control.
+The strict adapter gate also identifies missing and nonfinite parameter names
+separately in its error, without relaxing either condition. **190 tests pass
+in 13.33 seconds**; targeted Ruff and diff checks pass.
+
+Both source-bound numerical gates exactly repeat their qualified values:
+original /0 **0.009696634512675821**, **170.45722433301853 seconds**
+(`policy-continue13-stable-swiglu-0`), and complete whole /10
+**0.007422680729897122**, rewards **[1,0]**, advantages **[1,-1]**, all
+**9 turns / 1338 tokens** (`policy-continue13-stable-swiglu-update-10`).
+Forward finishes in **314.7213115830091 seconds**, backward in
+**543.7165066250018 seconds**, and exactly one optimizer step finishes in
+**544.0041401659837 seconds**, inside the unchanged 600-second phase budget.
+All adapter gradients are present and finite; pre-clipping norm is
+**0.15002289414405823**, adapter delta L1 **147.10803923694766**. Immutable
+v1 export is changed and the PEFT roundtrip is exact; adapter SHA-256 changes
+from `0cadd9374244b6954871ca47afba64e8c8feafe61080d25b8e75c7012c4f9572`
+to `ba1d957f8366021b331deb8442d6720d7b0457c5c8f7dd9501367c1025ae7f32`.
+
+This is **one measured optimizer step, not an accepted training update**:
+the report is `updated-exported-memory-blocked`. Its **8085** valid samples
+record allocated peak **22,456,638,720**, driver **26,799,194,112 <=
+26,800,603,136 bytes**, RSS high-water **1,506,983,936 bytes**, but swap grows
+**1345.19 MiB**. Total elapsed **887.4502899590007 seconds**. Production must
+not load this memory-blocked v1. The code milestone is `acc99aa`; S1/S2/S3
+acceptance and all historical failed evidence remain unchanged.
+
+### r18 scheduled allocator-cache reclamation
+
+The next schedule calls `torch.mps.empty_cache()` every **144 layer-segment
+entries**, including checkpoint recomputations. Only unused allocator cache
+is released; all live policy activations and historical KV remain attached.
+No allocation limit, measured peak threshold, swap baseline or deadline is
+changed. Reclamation time is charged before the segment's deadline check.
+Snapshots expose actual reclamation counts. A fixed-schedule regression
+requires exactly two calls in 288 entries; existing complete-history gradient
+and arithmetic controls remain. **191 tests pass in 13.25 seconds**, with the
+same inspection-only warning; targeted Ruff and diff checks pass. The operator
+revision is **native-s4-affine-cache-r18**, committed as `1f89565`.
+
+The source-bound original /0 again exactly reproduces **MAE
+0.009696634512675821**, all **9 turns / 636 tokens**, in
+**168.50899262499297 seconds** (`policy-continue13-reclaim-0`). Whole /10
+again exactly reproduces **0.007422680729897122**, rewards **[1,0]**,
+advantages **[1,-1]**, all **9 turns / 1338 tokens**, before any backward.
+The full update is `policy-continue13-reclaim-update-10`:
+
+- Forward: **313.69065545799094s**, 3528 segment entries, 24 cache reclaims.
+- Complete single backward: **541.6195920409809s**, 7056 entries, 49 reclaims.
+- Exactly one optimizer step: **541.8996607080044s**, unchanged 600s budget.
+- Finite/present gradients, norm **0.15002289414405823**, adapter delta L1
+  **147.10803923694766**, unchanged episode-balanced weighting.
+- Immutable changed v1 and exact PEFT roundtrip; tensor SHA-256 exactly equals
+  the independently exported r17 adapter above, despite the cache schedule.
+- Export snapshot: **542.0822771659878s**; total including independent
+  preflight, hashing and cleanup: **882.3983323330176s**.
+- **7732** valid samples; allocated **22,469,236,480**, driver
+  **25,527,287,808 <= 26,800,603,136 bytes**, RSS **1,493,827,584 bytes**.
+- Own-phase swap **4188.38 -> 3772.38 MiB**, delta **-416.0 MiB**: complete
+  update/backward/optimizer/export memory gate **passes**.
+
+The report is `updated-exported-feedback-pending`, **Updates = 1**. This is the
+first memory-qualified update, not permission to serve r17's blocked export.
+The qualified policy is **s4-policy-v1-b60ac01c1b9c71ef**, parent
+**s4-policy-v0-d43b14bef7d62f10**. r17 also executed one measured step in a
+separate attempt from the same immutable v0, but its swap failure remains;
+the two attempts are not a two-step policy chain.
+
+### Fresh production-v1 feedback
+
+Only after r18 passes, the owned production API/engine loads that exact v1,
+never alongside a native model. A new declaration fixes HumanEval/10 at two
+episodes, temperature 1.0, 2048 output tokens and 300s activity deadlines,
+matching the earlier group's sampling settings. All starts are retained.
+`policy-continue13-v1-10` completes **2/2** externally verified successes:
+**9 turns / 904 response tokens**, respectively **3/4 tool turns**, one dsh
+session per episode, exact per-interaction proxy/dsh token reconciliation,
+no truncation, tool errors or incomplete episodes. Both episodes are training
+eligible; rewards **[1,1]** imply zero advantages, not a second update.
+
+Production evidence is `policy-continue13-v1-production`: actual cache layout
+**2133 blocks / 4.69 GiB**, not the requested cache-byte flag's nominal size.
+System swap **3853.25 -> 3797.25 MiB** decreases by **56.0 MiB** across serving;
+these endpoint/RSS snapshots are not sampled serving-device peaks. Owned API
+PID 318 and engine PID 330 both exit, with no port-8000 listener, before the
+fresh group's native `--policy-version 1` preflight starts. The v0 exploration
+ledger stays **36/81 successes, 45 failures**; separate v1 feedback is **2/2**,
+or **38/83** combined engineering starts. This is not a benchmark or a measured
+policy-improvement estimate; /20 and /54 remain unstarted.
+
+The fresh source-bound native-v1 preflight exactly covers all **9 turns /
+904 tokens**, **MAE 0.008663687576587205 <= 0.01**, elapsed
+**231.79751437497907 seconds** (`policy-continue13-v1-preflight-10`). Source,
+probe, served catalog, immutable parent/v1 adapter and complete-group hashes
+verify. `policy_parity_passed=true`; overall `status=blocked` / expected exit
+2 reflects only rewards **[1,1]**, advantages **[0,0]**. Its read-only
+`updates=0` does not reset the qualified training chain's one update. This
+closes the requested bounded training/export/production/native feedback gates;
+it does not justify another optimizer step on this homogeneous group.
 
 ## Continue12: whole-group shared autograd scheduling
 
