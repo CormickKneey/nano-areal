@@ -129,8 +129,46 @@ in 10.53 seconds**, targeted Ruff and diff checks pass. The operator revision
 **native-s4-affine-cache-r10** is not adapter v1. Its source-bound original
 /0 preflight reproduces exactly **MAE 0.009696634512675821 <= 0.01**, all
 **9 turns / 636 tokens**, in **170.7715755419922 seconds**
-(`policy-continue12-tokenwise-0/preflight.json`). Whole /10 qualification and
-a measured complete update are pending.
+(`policy-continue12-tokenwise-0/preflight.json`).
+
+The r10 whole /10 update again measures exactly **0.007422680729897122**.
+All nine differentiable forwards complete in **330.1351562500058 seconds**;
+allocated/driver snapshots at that point are **19,223,172,608 /
+21,879,275,520 bytes**. The single group backward still exceeds **600 seconds**.
+Final status **error**, **Updates = 0**, elapsed **944.0577611250046 seconds**;
+cleanup succeeds. The **8539** valid samples record allocated peak
+**20,916,650,496**, driver **26,788,708,352 <= 26,800,603,136 bytes**, but swap
+increases **5218.00 -> 5631.81 MiB**, **+413.81 MiB**. The partial memory gate
+**fails**. CPU process RSS high-water is **7,765,999,616 bytes**, so reducing
+device allocations alone has not removed complete-history graph overhead.
+
+### r11 tokenwise attention forward, batched complete-KV backward
+
+The next first-order autograd function preserves each token's original
+Split-KV forward exactly, but builds the backward graph for up to **16 causal
+queries together**. It returns gradients for every required query, complete
+historical key and value input. It does **not** detach any saved input or KV.
+The batched backward uses the same partition/causal formula; bf16 gradient
+summation order can differ, tested at relative norm error **<= 1/128** against
+independent sequential attention. CPU/MPS tests cross a 512-token partition,
+cover a frozen key, require nonzero historical value gradients and exactly
+zero future-value gradients, and require **exact forward equality**.
+
+This avoids retaining a separate large Python autograd subgraph for every
+query's attention in the group forward. Frozen linear input gradients remain
+batched; MLP selective retention remains disabled. Native RMS is now installed
+directly instead of computing and discarding the original RMS before its
+forward-hook replacement. The Metal RMS output/derivative is unchanged.
+**185 tests pass in 12.92 seconds**; targeted Ruff and diff checks pass.
+The operator revision **native-s4-affine-cache-r11** is not adapter v1.
+The source-bound original /0 confirmation exactly reproduces **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 tokens**, in
+**171.81344037500094 seconds**
+(`policy-continue12-attention-confirmed-0/preflight.json`); native/probe source
+hashes verify. The earlier `policy-continue12-attention-0` run is retained as
+**invalid source-binding evidence**: a formatting edit after its source snapshot
+correctly triggers `Bound training arithmetic source changed`. Its result is
+not used for qualification. Whole /10 and bounded update measurement is pending.
 
 ## Continue11: persistent differentiable KV blocks
 

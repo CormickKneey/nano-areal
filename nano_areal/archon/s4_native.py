@@ -20,8 +20,8 @@ from nano_areal.archon.s4_operators import (
     device_rope_frequencies,
     rounded_swiglu,
     splitk_prefill,
-    splitkv_attention,
     tokenwise_frozen_linear,
+    tokenwise_splitkv_attention,
 )
 from nano_areal.archon.s4_replay import cached_text_logprobs
 from nano_areal.archon.s4_update import trajectory_from_turn
@@ -109,9 +109,12 @@ class AlignedS4Runtime:
 
                 module.forward = MethodType(forward, module)
             if isinstance(module, RMSNorm):
-                self.handles.append(module.register_forward_hook(
-                    lambda module, inputs, output: differentiable_metal_rms(
-                        inputs[0], module.weight, module.eps)))
+                self.forwards.append((module, module.forward))
+
+                def forward_rms(module, hidden):
+                    return differentiable_metal_rms(hidden, module.weight, module.eps)
+
+                module.forward = MethodType(forward_rms, module)
         for layer in model.language_model.layers:
             state = {}
             self.activation_states.append(state)
@@ -169,12 +172,8 @@ class AlignedS4Runtime:
         if self.prefill:
             return torch.nn.functional.scaled_dot_product_attention(
                 query.float(), key.float(), value.float(), **options).to(query.dtype)
-        offset = key.shape[-2] - query.shape[-2]
-        return torch.cat([
-            splitkv_attention(query[..., index:index + 1, :],
-                              key[..., :offset + index + 1, :],
-                              value[..., :offset + index + 1, :], offset + index)
-            for index in range(query.shape[-2])], dim=-2)
+        return tokenwise_splitkv_attention(
+            query, key, value, key.shape[-2] - query.shape[-2])
 
     def project_head(self, hidden, start, end):
         return affine_decode_weights(hidden, *self.head)
@@ -253,12 +252,12 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r10",
+        return {"name": "native-s4-affine-cache-r11",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
-                               "batch frozen-linear input gradients across 16 rows",
+                               "batch frozen-linear/Split-KV gradients over 16 rows",
                 "selective_checkpoint": "Disabled; recompute layer products",
                 "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
                 "storage": "Frozen fp32 affine base and shared head biases; "
@@ -266,7 +265,8 @@ class AlignedS4Runtime:
                 "gradients": "One whole-group backward through shared history; "
                              "no detached prefix KV; checkpointed token head; "
                              "persistent KV blocks, concatenate inside non-reentrant "
-                             "layer checkpoints; first-order Metal RMS/frozen linear",
+                             "layer checkpoints; first-order Metal RMS, frozen linear "
+                             "and Split-KV; full query/key/value gradients",
                 "scope": "Text-only declared group, prefill suffix >=16 rows",
                 "max_runtime_seconds_per_phase": 600}
 

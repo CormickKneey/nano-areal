@@ -50,6 +50,35 @@ def splitkv_attention(query, key, value, query_offset, partition_size=512):
     return output.to(query.dtype)
 
 
+class _TokenwiseSplitKV(torch.autograd.Function):
+    @staticmethod
+    def forward(context, query, key, value, query_offset):
+        context.save_for_backward(query, key, value)
+        context.query_offset = query_offset
+        return torch.cat([
+            splitkv_attention(query[..., index:index + 1, :],
+                              key[..., :query_offset + index + 1, :],
+                              value[..., :query_offset + index + 1, :],
+                              query_offset + index)
+            for index in range(query.shape[-2])], dim=-2)
+
+    @staticmethod
+    @once_differentiable
+    def backward(context, gradient):
+        inputs = context.saved_tensors
+        needed = context.needs_input_grad[:3]
+        with torch.enable_grad():
+            output = splitkv_attention(*inputs, context.query_offset)
+            gradients = iter(torch.autograd.grad(
+                output, [tensor for tensor, required in zip(inputs, needed, strict=True)
+                         if required], gradient))
+        return (*[next(gradients) if required else None for required in needed], None)
+
+
+def tokenwise_splitkv_attention(query, key, value, query_offset):
+    return _TokenwiseSplitKV.apply(query, key, value, query_offset)
+
+
 def affine_weights(packed, scales, biases):
     if packed.ndim != 2 or scales.ndim != 2 or scales.shape != biases.shape:
         raise ValueError("Expected matrix affine quantization tensors")

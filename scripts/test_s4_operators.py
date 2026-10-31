@@ -19,6 +19,7 @@ from nano_areal.archon.s4_operators import (
     splitk_prefill,
     splitkv_attention,
     tokenwise_frozen_linear,
+    tokenwise_splitkv_attention,
 )
 
 
@@ -105,6 +106,39 @@ def test_splitkv_masks_future_partitions_and_has_finite_gradients():
     assert not bool(key.grad[..., 513:, :].any())
     with pytest.raises(ValueError, match="compatible bf16"):
         splitkv_attention(query.float(), key, value, 510)
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("offset", [510, 1024])
+@pytest.mark.parametrize("frozen_key", [False, True])
+def test_tokenwise_attention_preserves_values_and_complete_kv_gradients(
+    device, offset, frozen_key,
+):
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is required")
+    torch.manual_seed(44)
+    query = torch.randn(1, 2, 16, 128, device=device, dtype=torch.bfloat16,
+                        requires_grad=True)
+    key = torch.randn(1, 2, offset + 23, 128, device=device, dtype=torch.bfloat16,
+                      requires_grad=not frozen_key)
+    value = torch.randn_like(key, requires_grad=True)
+    gradient = torch.randn_like(query)
+    targets = [tensor for tensor in (query, key, value) if tensor.requires_grad]
+    expected = torch.cat([
+        splitkv_attention(query[..., index:index + 1, :],
+                          key[..., :offset + index + 1, :],
+                          value[..., :offset + index + 1, :], offset + index)
+        for index in range(16)], dim=-2)
+    expected_gradients = torch.autograd.grad(expected, targets, gradient)
+    actual = tokenwise_splitkv_attention(query, key, value, offset)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    gradients = torch.autograd.grad(actual, targets, gradient)
+    for observed, reference in zip(gradients, expected_gradients, strict=True):
+        assert bool(torch.isfinite(observed).all())
+        difference = (observed.float() - reference.float()).norm()
+        assert float(difference / reference.float().norm()) <= 1 / 128
+    assert bool(gradients[-1][..., :offset, :].abs().any())
+    assert not bool(gradients[-1][..., offset + 16:, :].any())
 
 
 def test_mlx_paged_splitkv_rounding(tmp_path):
