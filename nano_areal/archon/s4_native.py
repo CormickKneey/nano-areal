@@ -139,6 +139,7 @@ class AlignedS4Runtime:
         self.trainer.response_logprobs = self.response_logprobs
         self.trainer.select_turn = self.select_turn
         self.trainer.response_group_logprobs = self.response_group_logprobs
+        self.trainer.training_group_logprobs = self.training_group_logprobs
         torch.mps.synchronize()
         torch.mps.empty_cache()
 
@@ -171,7 +172,31 @@ class AlignedS4Runtime:
     def project_head(self, hidden, start, end):
         return affine_decode_weights(hidden, *self.head)
 
-    def response_group_logprobs(self, trajectories):
+    def training_group_logprobs(self, trajectories, snapshot):
+        if not torch.is_grad_enabled() or not self.trainer.model.training:
+            raise ValueError("Training group requires enabled policy autograd")
+        modules = [module for module in self.trainer.model.modules()
+                   if isinstance(module, qwen3vl.LoRALinear)]
+        zero_adapter = bool(modules) and all(
+            module.enabled and bool(torch.isfinite(module.lora_a).all())
+            and not bool(module.lora_b.detach().any()) for module in modules)
+        currents = self.response_group_logprobs(
+            trajectories, lambda: snapshot("forward"))
+        if zero_adapter:
+            references = [current.detach() for current in currents]
+            mode = "Frozen native base via verified exact-zero LoRA-B identity"
+        else:
+            self.trainer.model.eval()
+            try:
+                with torch.no_grad(), self.trainer.model.disable_adapter():
+                    references = self.response_group_logprobs(
+                        trajectories, lambda: snapshot("reference"))
+            finally:
+                self.trainer.model.train()
+            mode = "Frozen native base evaluated with adapters disabled"
+        return currents, references, mode
+
+    def response_group_logprobs(self, trajectories, after_turn=None):
         if self.group_replay or len(trajectories) != len(self.history):
             raise ValueError("Group replay requires the complete declared "
                              "turn sequence")
@@ -182,6 +207,8 @@ class AlignedS4Runtime:
             for index, trajectory in enumerate(trajectories):
                 self.select_turn(index)
                 results.append(self.response_logprobs(trajectory))
+                if after_turn is not None:
+                    after_turn()
             return results
         finally:
             self.group_replay = False
@@ -210,6 +237,7 @@ class AlignedS4Runtime:
                 activate_segment=self.activate_segment, checkpoint_layers=True,
                 score_response=index == self.index, decode_chunk_size=16,
                 checkpoint_head=True,
+                retain_decode_mlp=True,
             )
         if differentiating and not self.group_replay:
             self.states.pop(enabled, None)
@@ -218,10 +246,12 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r5",
+        return {"name": "native-s4-affine-cache-r6",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
+                "selective_checkpoint": "Retain single-token MLP matrix products only",
+                "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",
                 "gradients": "One whole-group backward through shared history; "
@@ -242,6 +272,8 @@ class AlignedS4Runtime:
             del self.trainer.select_turn
         if hasattr(self.trainer, "response_group_logprobs"):
             del self.trainer.response_group_logprobs
+        if hasattr(self.trainer, "training_group_logprobs"):
+            del self.trainer.training_group_logprobs
         self.states.clear()
         for handle in self.handles:
             handle.remove()

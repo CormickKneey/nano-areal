@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import torch
 from torch.nn import functional as F
-from torch.utils.checkpoint import checkpoint
+from torch.utils.checkpoint import (
+    CheckpointPolicy,
+    checkpoint,
+    create_selective_checkpoint_contexts,
+)
 
 from nano_areal.archon import model as native_model
 
@@ -55,6 +60,7 @@ def cached_text_logprobs(
     observe=None,
     attention_kernel=None, activate_segment=None, checkpoint_layers=False,
     score_response=True, decode_chunk_size=1, checkpoint_head=False,
+    retain_decode_mlp=False,
 ):
     if not 1 <= decode_chunk_size <= 16:
         raise ValueError("Decode checkpoint chunks must contain 1 to 16 tokens")
@@ -148,8 +154,24 @@ def cached_text_logprobs(
 
             history = cache[index]
             if checkpoint_layers and model.training and torch.is_grad_enabled():
+                options = {}
+                if retain_decode_mlp and end != prompt:
+                    intermediate, width = layer.mlp.gate_proj.weight.shape
+
+                    def policy(context, operation, *arguments, width=width,
+                               intermediate=intermediate, **keywords):
+                        if (operation in (torch.ops.aten.mm.default,
+                                          torch.ops.aten.linear.default)
+                                and arguments[0].numel() == arguments[0].shape[-1]
+                                and arguments[1].shape in (
+                                    (width, intermediate), (intermediate, width))):
+                            return CheckpointPolicy.MUST_SAVE
+                        return CheckpointPolicy.PREFER_RECOMPUTE
+
+                    options["context_fn"] = partial(
+                        create_selective_checkpoint_contexts, policy)
                 hidden, key, value = checkpoint(
-                    forward_layer, hidden, history, use_reentrant=False)
+                    forward_layer, hidden, history, use_reentrant=False, **options)
             else:
                 hidden, key, value = forward_layer(hidden, history)
             cache[index] = CacheBlock(key, value, history)

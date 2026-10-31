@@ -36,15 +36,22 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
     ratios = []
     turn_index = 0
     grouped = hasattr(trainer, "response_group_logprobs")
+    native_group = hasattr(trainer, "training_group_logprobs")
     group_loss = None
+    reference_mode = "same frozen aligned base with adapters disabled"
     if grouped:
         trajectories = [trajectory_from_turn(turn)[0]
                         for episode in episodes for turn in episode["turns"]]
-        trainer.model.eval()
-        with torch.no_grad(), trainer.model.disable_adapter():
-            references = trainer.response_group_logprobs(trajectories)
-        trainer.model.train()
-        currents = trainer.response_group_logprobs(trajectories)
+        if native_group:
+            trainer.model.train()
+            currents, references, reference_mode = trainer.training_group_logprobs(
+                trajectories, snapshot)
+        else:
+            trainer.model.eval()
+            with torch.no_grad(), trainer.model.disable_adapter():
+                references = trainer.response_group_logprobs(trajectories)
+            trainer.model.train()
+            currents = trainer.response_group_logprobs(trajectories)
     for index, episode in enumerate(episodes):
         token_count = sum(sum(turn["response_mask"]) for turn in episode["turns"])
         if not token_count:
@@ -73,7 +80,8 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
             if not bool(torch.isfinite(loss)):
                 raise ValueError("Nonfinite GRPO loss")
             weight = current.numel() / token_count / len(episodes)
-            snapshot("forward")
+            if not native_group:
+                snapshot("forward")
             if grouped:
                 weighted = loss * weight
                 group_loss = weighted if group_loss is None else group_loss + weighted
@@ -112,5 +120,7 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
             "episode_advantages": advantages.tolist(), "grad_norm": grad_norm,
             "adapter_delta_l1": delta, "ratio_mean": sum(ratios) / len(ratios),
             "optimizer_steps": 1, "elapsed_seconds": time.monotonic() - started,
+            "differentiable_turns": turn_index,
+            "backward_calls": 1 if grouped else turn_index,
             "weighting": "equal episodes; response-token mean within each episode",
-            "reference": "same frozen aligned base with adapters disabled"}
+            "reference": reference_mode}

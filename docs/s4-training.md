@@ -23,8 +23,47 @@ The source-bound original sampled /0 preflight reproduces exactly **MAE
 0.009696634512675821 <= 0.01**, all **9 turns / 636 response tokens**, in
 **187.73480583401397 seconds** (`policy-continue12-group-0/preflight.json`).
 Unchanged rewards **[1,1]** / advantages **[0,0]** still block that group's
-update. The complete /10 bounded measurement is pending; implementation and
-small-model tests are not full S4 training or memory acceptance.
+update.
+
+### r5 measured boundary
+
+`policy-continue12-group-update-10/update.json` independently reproduces
+whole /10 **MAE 0.007422680729897122**, all **9 turns / 1338 tokens**, with
+unchanged official rewards **[1,0]** / advantages **[1,-1]**. Its separate
+frozen-reference pass plus differentiable group forward exhaust the unchanged
+**600-second** update budget before a backward. Final status **error**,
+**Updates = 0**, elapsed **981.019436417002 seconds**. A cleanup allocation
+also fails; the primary timeout and secondary OOM are both retained.
+
+The **8837** valid 100ms samples record allocated peak **19,398,518,528** and
+driver peak **26,794,999,808 <= 26,800,603,136 bytes**. Swap increases
+**4242.62 -> 4314.44 MiB**, **+71.82 MiB**; the partial memory gate **fails**.
+No complete backward, optimizer, export, v1 or feedback is qualified.
+
+### r6 selective checkpoint and exact-zero reference identity
+
+The next operator revision, **native-s4-affine-cache-r6**, retains only
+single-token MLP matrix-product outputs during layer checkpointing. It
+recomputes the other operations, preserving their original arithmetic and all
+historical KV gradients. Both MPS `aten.linear` and CPU `aten.mm` dispatches
+are covered. A native two-layer/two-turn storage test counts exactly **24**
+retained matrix products / **20,480 bytes**, excluding prefills, attention and
+head outputs. Full-model retention still needs an actual measured budget.
+
+For a verified exactly zero LoRA-B adapter with finite LoRA-A and all adapters
+enabled, native policy values equal the frozen native base exactly. The
+training path uses those native values as detached **reference scores only**,
+avoiding another identical full-group decode. It never detaches current-policy
+graphs or any historical KV. A changed/nonzero adapter falls back to actual
+adapter-disabled native evaluation. Native regression tests compare both
+reference branches with explicit frozen-base evaluation at exact equality.
+No captured production score is used as a differentiable reference.
+
+Per-turn update snapshots now include elapsed update-phase time. **169 tests
+pass in 9.48 seconds**; targeted Ruff and diff checks pass. A selective
+checkpoint/saved-tensor-hooks compatibility warning is confined to the
+storage-inspection test. The r6 source-bound numerical/update probes are
+pending; no S4 training or memory acceptance follows from these changes.
 
 ## Continue11: persistent differentiable KV blocks
 

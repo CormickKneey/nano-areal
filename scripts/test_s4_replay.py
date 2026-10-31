@@ -172,7 +172,8 @@ def test_cache_block_prefix_keeps_original_autograd_and_deep_history():
     assert not bool(key.grad[..., 8:, :].any())
 
 
-def test_shared_group_backward_matches_independent_complete_history_in_fp32():
+@pytest.mark.parametrize("retain_mlp", [False, True])
+def test_shared_group_backward_matches_independent_complete_history_in_fp32(retain_mlp):
     torch.manual_seed(53)
     model = Qwen3VLModel(tiny_config().to_dict()).float().train()
     add_lora(model)
@@ -198,7 +199,8 @@ def test_shared_group_backward_matches_independent_complete_history_in_fp32():
     for trajectory in trajectories:
         currents.append(cached_text_logprobs(
             model, trajectory, state=state, checkpoint_layers=True,
-            checkpoint_head=True, decode_chunk_size=16))
+            checkpoint_head=True, decode_chunk_size=16,
+            retain_decode_mlp=retain_mlp))
     for actual, reference in zip(currents, expected, strict=True):
         torch.testing.assert_close(actual, reference, rtol=0, atol=0)
     sum(current.sum() * (index + 1)

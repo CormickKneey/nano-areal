@@ -298,6 +298,7 @@ def main():
             if not report["blockers"]:
                 report["status"] = "preflight-passed-no-update"
             if args.phase == "update" and not report["blockers"]:
+                update_started = time.monotonic()
                 if aligned_runtime is not None:
                     aligned_runtime.start_update()
                 report["phase_memory"] = []
@@ -308,6 +309,7 @@ def main():
                     torch.mps.synchronize()
                     report["phase_memory"].append({
                         "stage": stage, **memory_snapshot(os.getpid()),
+                        "update_elapsed_seconds": time.monotonic() - update_started,
                         "mps_allocated_bytes": torch.mps.current_allocated_memory(),
                         "mps_driver_bytes": torch.mps.driver_allocated_memory(),
                     })

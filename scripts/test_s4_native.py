@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 from test_archon_parity import tiny_config
+from torch.utils.checkpoint import CheckpointPolicy
 
-from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
+from nano_areal.archon import s4_replay
+from nano_areal.archon.qwen3vl import LoRALinear, Qwen3VLModel, add_lora
 from nano_areal.archon.s4_native import AlignedS4Runtime
 from nano_areal.archon.s4_operators import affine_decode_weights, affine_weights
 from nano_areal.archon.s4_replay import cached_text_logprobs
@@ -200,6 +202,67 @@ def test_bound_runtime_rejects_unselected_and_mismatched_turns():
             runtime.select_turn(2)
     finally:
         runtime.close()
+
+
+def test_selective_replay_retains_only_bounded_decode_mlp_products(monkeypatch):
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    original = s4_replay.create_selective_checkpoint_contexts
+    retained = []
+
+    def contexts(policy):
+        def record(context, operation, *arguments, **keywords):
+            decision = policy(context, operation, *arguments, **keywords)
+            if not context.is_recompute and decision == CheckpointPolicy.MUST_SAVE:
+                left, right = arguments
+                outputs = (right.shape[0] if operation == torch.ops.aten.linear.default
+                           else right.shape[1])
+                retained.append(outputs * left.element_size())
+            return decision
+
+        return original(record)
+
+    monkeypatch.setattr(s4_replay, "create_selective_checkpoint_contexts", contexts)
+    try:
+        trainer.model.train()
+        currents = trainer.response_group_logprobs(runtime.history)
+        assert len(retained) == 24
+        assert sum(retained) == 20480
+        sum(current.sum() for current in currents).backward()
+        assert len(retained) == 24
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_training_group_reference_identity_requires_exact_zero_adapter(changed):
+    trainer, quantized, episodes = aligned_fixture()
+    if changed:
+        with torch.no_grad():
+            for module in trainer.model.modules():
+                if isinstance(module, LoRALinear):
+                    module.lora_b.fill_(0.01)
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        trainer.model.train()
+        stages = []
+        currents, references, mode = trainer.training_group_logprobs(
+            runtime.history, stages.append)
+        assert all(current.requires_grad for current in currents)
+        assert all(not reference.requires_grad for reference in references)
+        assert stages == (["forward"] * 2 + ["reference"] * 2 if changed
+                          else ["forward"] * 2)
+        assert ("exact-zero" in mode) != changed
+        with torch.no_grad(), trainer.model.disable_adapter():
+            expected = trainer.response_group_logprobs(runtime.history)
+        for reference, actual in zip(references, expected, strict=True):
+            torch.testing.assert_close(reference, actual, rtol=0, atol=0)
+        sum(current.sum() for current in currents).backward()
+        assert any(bool(parameter.grad.abs().any())
+                   for parameter in trainer.parameters.values())
+    finally:
+        runtime.close()
+    assert not hasattr(trainer, "training_group_logprobs")
 
 
 def test_bound_runtime_has_a_hard_segment_deadline():
