@@ -199,12 +199,13 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r1",
+        return {"name": "native-s4-affine-cache-r2",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "storage": "Frozen fp32 affine base; bf16 activations; fp32 LoRA",
                 "gradients": "Recompute complete cache history, no detached prefix KV; "
-                             "non-reentrant layer checkpoints; first-order Metal RMS",
+                             "persistent KV blocks, concatenate inside non-reentrant "
+                             "layer checkpoints; first-order Metal RMS",
                 "scope": "Text-only declared group, prefill suffix >=16 rows",
                 "max_runtime_seconds_per_phase": 600}
 

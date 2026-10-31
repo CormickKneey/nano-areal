@@ -2,11 +2,52 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from nano_areal.archon import model as native_model
+
+
+@dataclass(frozen=True)
+class CacheBlock:
+    key: torch.Tensor
+    value: torch.Tensor
+    previous: CacheBlock | None = None
+
+    @property
+    def length(self):
+        length = 0
+        block = self
+        while block is not None:
+            length += block.key.shape[-2]
+            block = block.previous
+        return length
+
+    def prefix(self, length):
+        block = self
+        end = self.length
+        while block is not None:
+            start = end - block.key.shape[-2]
+            if length > start:
+                if length == end:
+                    return block
+                return CacheBlock(block.key[..., :length - start, :],
+                                  block.value[..., :length - start, :],
+                                  block.previous)
+            block, end = block.previous, start
+        return None
+
+    def tensors(self):
+        blocks = []
+        block = self
+        while block is not None:
+            blocks.append(block)
+            block = block.previous
+        return ([block.key for block in reversed(blocks)],
+                [block.value for block in reversed(blocks)])
 
 
 def cached_text_logprobs(
@@ -32,8 +73,7 @@ def cached_text_logprobs(
             break
         matched += 1
     reused = matched // 16 * 16
-    cache = ([tuple(value[..., :reused, :] for value in pair)
-              for pair in state["cache"]] if reused else
+    cache = ([block.prefix(reused) for block in state["cache"]] if reused else
              [None] * len(model.language_model.layers))
     ids = ids.to(device).unsqueeze(0)
     scores = []
@@ -52,7 +92,7 @@ def cached_text_logprobs(
             attention_mask = (torch.arange(end, device=device)[None, :]
                               <= torch.arange(start, end, device=device)[:, None])
         for index, layer in enumerate(model.language_model.layers):
-            def forward_layer(hidden, old_key, old_value, layer=layer, index=index,
+            def forward_layer(hidden, history, layer=layer, index=index,
                               start=start, end=end, length=length, cos=cos, sin=sin,
                               attention_mask=attention_mask):
                 if activate_segment is not None:
@@ -70,9 +110,11 @@ def cached_text_logprobs(
                     observe(f"layers.{index}.attn.rope_query", query)
                     observe(f"layers.{index}.attn.rope_key", key)
                 key, value = key.transpose(1, 2), value.transpose(1, 2)
-                if old_key is not None:
-                    key = torch.cat((old_key, key), dim=-2)
-                    value = torch.cat((old_value, value), dim=-2)
+                new_key, new_value = key, value
+                if history is not None:
+                    keys, values = history.tensors()
+                    key = torch.cat((*keys, key), dim=-2)
+                    value = torch.cat((*values, value), dim=-2)
                 kernel = attention_kernel or F.scaled_dot_product_attention
                 attended = kernel(
                     query.transpose(1, 2),
@@ -82,15 +124,15 @@ def cached_text_logprobs(
                 ).transpose(1, 2).contiguous().view(1, length, -1)
                 hidden = hidden + attention.o_proj(attended)
                 hidden = hidden + layer.mlp(layer.post_attention_layernorm(hidden))
-                return hidden, key, value
+                return hidden, new_key, new_value
 
-            old_key, old_value = cache[index] if cache[index] else (None, None)
+            history = cache[index]
             if checkpoint_layers and model.training and torch.is_grad_enabled():
                 hidden, key, value = checkpoint(
-                    forward_layer, hidden, old_key, old_value, use_reentrant=False)
+                    forward_layer, hidden, history, use_reentrant=False)
             else:
-                hidden, key, value = forward_layer(hidden, old_key, old_value)
-            cache[index] = key, value
+                hidden, key, value = forward_layer(hidden, history)
+            cache[index] = CacheBlock(key, value, history)
         if not score_response:
             continue
         hidden = model.language_model.norm(hidden[:, -1:])

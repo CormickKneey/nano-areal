@@ -9,7 +9,7 @@ from safetensors.torch import save_file
 from test_archon_parity import tiny_config
 
 from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
-from nano_areal.archon.s4_replay import cached_text_logprobs
+from nano_areal.archon.s4_replay import CacheBlock, cached_text_logprobs
 from nano_areal.archon.s4_update import trajectory_from_turn
 
 
@@ -110,6 +110,63 @@ def test_cached_native_rejects_multimodal_and_noncontiguous_turns():
     trajectory.pixel_values = torch.ones(1)
     with pytest.raises(ValueError, match="text only"):
         cached_text_logprobs(model, trajectory)
+
+
+def test_checkpoint_chunks_preserve_cross_turn_gradients_and_linear_storage():
+    torch.manual_seed(61)
+    model = Qwen3VLModel(tiny_config().to_dict()).float().train()
+    add_lora(model)
+    state = {}
+    trajectories = [trajectory_from_turn({
+        "input_ids": list(range(1, prompt + 17)),
+        "response_mask": [0] * prompt + [1] * 16,
+        "old_log_probs": [0] * (prompt + 16), "truncated": False,
+    })[0] for prompt in (32, 64)]
+    for index, trajectory in enumerate(trajectories):
+        current = cached_text_logprobs(
+            model, trajectory, state=state, checkpoint_layers=True,
+            score_response=index == 1)
+        if index == 0:
+            historical_value = state["cache"][0].prefix(32).value
+            historical_value.retain_grad()
+    assert state["reused_tokens"] == 32
+    for block in state["cache"]:
+        keys, values = block.tensors()
+        assert sum(key.shape[-2] for key in keys) == 79
+        assert [key.shape[-2] for key in keys] == [32, 32, *([1] * 15)]
+        assert sum(value.numel() for value in values) == sum(
+            key.numel() for key in keys)
+    current.sum().backward()
+    assert historical_value.grad is not None
+    assert bool(historical_value.grad.abs().any())
+    gradients = {name: parameter.grad.clone() for name, parameter in
+                 model.named_parameters() if parameter.grad is not None}
+    model.zero_grad(set_to_none=True)
+    trajectory = trajectories[-1]
+    ids = trajectory.input_ids.unsqueeze(0)
+    logits = model(ids, logits_to_keep=torch.arange(63, 79))
+    expected = logits.log_softmax(-1).gather(-1, ids[:, 64:, None]).squeeze(-1)
+    torch.testing.assert_close(current, expected, rtol=1e-5, atol=1e-5)
+    expected.sum().backward()
+    for name, parameter in model.named_parameters():
+        if name in gradients:
+            torch.testing.assert_close(gradients[name], parameter.grad,
+                                       rtol=1e-4, atol=1e-5)
+
+
+def test_cache_block_prefix_keeps_original_autograd_and_deep_history():
+    key = torch.randn(1, 2, 16, 4, requires_grad=True)
+    block = CacheBlock(key, key * 2)
+    for _ in range(1100):
+        block = CacheBlock(key[..., :1, :], key[..., :1, :] * 2, block)
+    assert block.length == 1116
+    assert block.prefix(0) is None
+    prefix = block.prefix(17)
+    assert prefix.length == 17 and prefix.previous.key is key
+    partial = block.prefix(8)
+    partial.key.sum().backward()
+    torch.testing.assert_close(key.grad[..., :8, :], torch.ones_like(key[..., :8, :]))
+    assert not bool(key.grad[..., 8:, :].any())
 
 
 @pytest.mark.parametrize("seconds", ["0", "601", "nan", "inf"])
