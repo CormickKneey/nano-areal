@@ -312,6 +312,8 @@ def main():
                         "update_elapsed_seconds": time.monotonic() - update_started,
                         "replay_segment_calls": getattr(
                             aligned_runtime, "segment_calls", None),
+                        "replay_cache_reclaims": getattr(
+                            aligned_runtime, "cache_reclaims", None),
                         "mps_allocated_bytes": torch.mps.current_allocated_memory(),
                         "mps_driver_bytes": torch.mps.driver_allocated_memory(),
                     })
@@ -367,6 +369,7 @@ def main():
         if aligned_runtime is not None:
             report["replay_progress"] = {
                 "segment_calls": getattr(aligned_runtime, "segment_calls", None),
+                "cache_reclaims": getattr(aligned_runtime, "cache_reclaims", None),
                 "last_segment": getattr(aligned_runtime, "last_segment", None),
             }
         try:

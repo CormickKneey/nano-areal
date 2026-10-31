@@ -334,6 +334,21 @@ def test_selective_attention_reuses_outputs_without_replaying_forward(monkeypatc
         runtime.close()
 
 
+def test_bound_runtime_reclaims_only_allocator_cache_on_fixed_schedule(monkeypatch):
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    reclaims = []
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: reclaims.append(True))
+    try:
+        for _ in range(288):
+            runtime.activate_segment(32, 48, 32)
+        assert reclaims == [True, True]
+        assert runtime.cache_reclaims == 2
+        assert runtime.contract()["cache_reclaim_interval_segments"] == 144
+    finally:
+        runtime.close()
+
+
 def test_bound_runtime_renews_update_budget_only_after_full_preflight():
     trainer, quantized, episodes = aligned_fixture()
     runtime = AlignedS4Runtime(trainer, quantized, episodes)

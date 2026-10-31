@@ -60,6 +60,7 @@ class AlignedS4Runtime:
         self.started = time.monotonic()
         self.prefill = True
         self.segment_calls = 0
+        self.cache_reclaims = 0
         self.last_segment = None
         self.states = {}
         self.group_replay = False
@@ -164,12 +165,16 @@ class AlignedS4Runtime:
             )
         self.states.clear()
         self.segment_calls = 0
+        self.cache_reclaims = 0
         self.last_segment = None
         self.started = time.monotonic()
 
     def activate_segment(self, start, end, prompt):
-        elapsed = time.monotonic() - self.started
         self.segment_calls += 1
+        if self.segment_calls % 144 == 0:
+            torch.mps.empty_cache()
+            self.cache_reclaims += 1
+        elapsed = time.monotonic() - self.started
         self.last_segment = {"start": start, "end": end, "prompt": prompt,
                              "elapsed_seconds": elapsed}
         if elapsed > 600:
@@ -263,10 +268,11 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r17",
+        return {"name": "native-s4-affine-cache-r18",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
+                "cache_reclaim_interval_segments": 144,
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
                                "batch frozen-linear/Split-KV gradients over 16 rows",
                 "selective_checkpoint": "Retain tokenwise gate/down matrix products "
