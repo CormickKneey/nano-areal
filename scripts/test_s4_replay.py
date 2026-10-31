@@ -172,6 +172,43 @@ def test_cache_block_prefix_keeps_original_autograd_and_deep_history():
     assert not bool(key.grad[..., 8:, :].any())
 
 
+def test_shared_group_backward_matches_independent_complete_history_in_fp32():
+    torch.manual_seed(53)
+    model = Qwen3VLModel(tiny_config().to_dict()).float().train()
+    add_lora(model)
+    trajectories = [trajectory_from_turn({
+        "input_ids": list(range(1, prompt + 17)),
+        "response_mask": [0] * prompt + [1] * 16,
+        "old_log_probs": [0] * (prompt + 16), "truncated": False,
+    })[0] for prompt in (32, 64, 80)]
+    expected = []
+    for index in range(len(trajectories)):
+        state = {}
+        for previous in range(index + 1):
+            current = cached_text_logprobs(
+                model, trajectories[previous], state=state,
+                score_response=previous == index, decode_chunk_size=16)
+        expected.append(current.detach())
+        (current.sum() * (index + 1)).backward()
+    gradients = {name: parameter.grad.clone() for name, parameter in
+                 model.named_parameters() if parameter.grad is not None}
+    model.zero_grad(set_to_none=True)
+    state = {}
+    currents = []
+    for trajectory in trajectories:
+        currents.append(cached_text_logprobs(
+            model, trajectory, state=state, checkpoint_layers=True,
+            checkpoint_head=True, decode_chunk_size=16))
+    for actual, reference in zip(currents, expected, strict=True):
+        torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+    sum(current.sum() * (index + 1)
+        for index, current in enumerate(currents)).backward()
+    for name, parameter in model.named_parameters():
+        if name in gradients:
+            torch.testing.assert_close(parameter.grad, gradients[name],
+                                       rtol=1e-4, atol=1e-5)
+
+
 @pytest.mark.parametrize("seconds", ["0", "601", "nan", "inf"])
 def test_native_diagnostic_rejects_unbounded_deadlines(monkeypatch, tmp_path, seconds):
     from diagnose_s4_operators import main

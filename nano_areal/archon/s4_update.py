@@ -35,6 +35,16 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
     loss_sum = 0.0
     ratios = []
     turn_index = 0
+    grouped = hasattr(trainer, "response_group_logprobs")
+    group_loss = None
+    if grouped:
+        trajectories = [trajectory_from_turn(turn)[0]
+                        for episode in episodes for turn in episode["turns"]]
+        trainer.model.eval()
+        with torch.no_grad(), trainer.model.disable_adapter():
+            references = trainer.response_group_logprobs(trajectories)
+        trainer.model.train()
+        currents = trainer.response_group_logprobs(trajectories)
     for index, episode in enumerate(episodes):
         token_count = sum(sum(turn["response_mask"]) for turn in episode["turns"])
         if not token_count:
@@ -45,11 +55,14 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
             trajectory, old = trajectory_from_turn(turn)
             if hasattr(trainer, "select_turn"):
                 trainer.select_turn(turn_index)
-            trainer.model.eval()
-            with torch.no_grad(), trainer.model.disable_adapter():
-                reference = trainer.response_logprobs(trajectory)
-            trainer.model.train()
-            current = trainer.response_logprobs(trajectory)
+            if grouped:
+                reference, current = references[turn_index], currents[turn_index]
+            else:
+                trainer.model.eval()
+                with torch.no_grad(), trainer.model.disable_adapter():
+                    reference = trainer.response_logprobs(trajectory)
+                trainer.model.train()
+                current = trainer.response_logprobs(trajectory)
             device = current.device
             behavior = old[trajectory.response_mask].to(device).unsqueeze(0)
             loss, stats = compute_policy_loss(
@@ -61,12 +74,22 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
                 raise ValueError("Nonfinite GRPO loss")
             weight = current.numel() / token_count / len(episodes)
             snapshot("forward")
-            (loss * weight).backward()
-            snapshot("backward")
+            if grouped:
+                weighted = loss * weight
+                group_loss = weighted if group_loss is None else group_loss + weighted
+            else:
+                (loss * weight).backward()
+                snapshot("backward")
             loss_sum += float(loss.detach()) * weight
             ratios.append(stats["ratio_mean"])
             del current, reference, loss
             turn_index += 1
+    if grouped:
+        group_loss.backward()
+        snapshot("backward")
+        del group_loss, currents, references
+    if time.monotonic() - started > max_seconds:
+        raise TimeoutError("Bounded optimizer wall-clock limit exceeded")
     if not all(parameter.grad is not None
                and bool(torch.isfinite(parameter.grad).all())
                for parameter in trainer.parameters.values()):
@@ -78,6 +101,8 @@ def bounded_step(trainer, episodes, snapshot, max_seconds=600):
         raise ValueError("Zero or nonfinite GRPO gradient")
     trainer.optimizer.step()
     snapshot("optimizer")
+    if time.monotonic() - started > max_seconds:
+        raise TimeoutError("Bounded optimizer wall-clock limit exceeded")
     delta = sum(float((value.detach().cpu() - previous[name]).abs().sum())
                 for name, value in trainer.parameters.items())
     if not delta:

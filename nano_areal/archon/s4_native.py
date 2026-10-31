@@ -59,6 +59,7 @@ class AlignedS4Runtime:
         self.started = time.monotonic()
         self.prefill = True
         self.states = {}
+        self.group_replay = False
         self.handles = []
         self.forwards = []
         self.activation_states = []
@@ -137,6 +138,7 @@ class AlignedS4Runtime:
             model.config["text_config"], device))
         self.trainer.response_logprobs = self.response_logprobs
         self.trainer.select_turn = self.select_turn
+        self.trainer.response_group_logprobs = self.response_group_logprobs
         torch.mps.synchronize()
         torch.mps.empty_cache()
 
@@ -169,6 +171,22 @@ class AlignedS4Runtime:
     def project_head(self, hidden, start, end):
         return affine_decode_weights(hidden, *self.head)
 
+    def response_group_logprobs(self, trajectories):
+        if self.group_replay or len(trajectories) != len(self.history):
+            raise ValueError("Group replay requires the complete declared "
+                             "turn sequence")
+        self.states.clear()
+        self.group_replay = True
+        try:
+            results = []
+            for index, trajectory in enumerate(trajectories):
+                self.select_turn(index)
+                results.append(self.response_logprobs(trajectory))
+            return results
+        finally:
+            self.group_replay = False
+            self.states.clear()
+
     def response_logprobs(self, trajectory):
         if self.index is None:
             raise ValueError("Select a bound turn before evaluating aligned arithmetic")
@@ -182,7 +200,7 @@ class AlignedS4Runtime:
                         if isinstance(module, qwen3vl.LoRALinear))
         differentiating = torch.is_grad_enabled()
         previous, state = self.states.get(enabled, (-1, {}))
-        if differentiating or previous != self.index - 1:
+        if (differentiating and not self.group_replay) or previous != self.index - 1:
             previous, state = -1, {}
         result = None
         for index in range(previous + 1, self.index + 1):
@@ -191,21 +209,23 @@ class AlignedS4Runtime:
                 state=state, attention_kernel=self.attention,
                 activate_segment=self.activate_segment, checkpoint_layers=True,
                 score_response=index == self.index, decode_chunk_size=16,
+                checkpoint_head=True,
             )
-        if differentiating:
+        if differentiating and not self.group_replay:
             self.states.pop(enabled, None)
         else:
             self.states[enabled] = self.index, state
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r4",
+        return {"name": "native-s4-affine-cache-r5",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",
-                "gradients": "Recompute complete cache history, no detached prefix KV; "
+                "gradients": "One whole-group backward through shared history; "
+                             "no detached prefix KV; checkpointed token head; "
                              "persistent KV blocks, concatenate inside non-reentrant "
                              "layer checkpoints; first-order Metal RMS",
                 "scope": "Text-only declared group, prefill suffix >=16 rows",
@@ -220,6 +240,8 @@ class AlignedS4Runtime:
         self.trainer.response_logprobs = self.original_response
         if hasattr(self.trainer, "select_turn"):
             del self.trainer.select_turn
+        if hasattr(self.trainer, "response_group_logprobs"):
+            del self.trainer.response_group_logprobs
         self.states.clear()
         for handle in self.handles:
             handle.remove()

@@ -76,11 +76,51 @@ def test_episode_weighting_does_not_depend_on_turn_count():
     assert report["episode_advantages"] == [-1.0, 1.0]
 
 
+def test_whole_group_backward_matches_independent_turn_accumulation():
+    baseline = tiny_trainer()
+    candidate = tiny_trainer()
+    calls = []
+
+    def group_logprobs(trajectories):
+        calls.append((candidate.model.enabled, torch.is_grad_enabled()))
+        return [candidate.response_logprobs(trajectory) for trajectory in trajectories]
+
+    candidate.response_group_logprobs = group_logprobs
+    group = episodes([0.0, 1.0])
+    group[0]["turns"] *= 3
+    expected = bounded_step(baseline, group, lambda stage: None)
+    stages = []
+    actual = bounded_step(candidate, group, stages.append)
+    torch.testing.assert_close(candidate.model.adapter, baseline.model.adapter)
+    assert actual["loss"] == pytest.approx(expected["loss"])
+    assert actual["grad_norm"] == pytest.approx(expected["grad_norm"])
+    assert calls == [(False, False), (True, True)]
+    assert stages == ["forward"] * 4 + ["backward", "optimizer"]
+
+
 def test_wall_clock_limit_never_steps():
     trainer = tiny_trainer()
     with pytest.raises(TimeoutError, match="wall-clock"):
         bounded_step(trainer, episodes([0.0, 1.0]), lambda stage: None, max_seconds=-1)
     assert trainer.optimizer.state == {}
+
+
+def test_group_backward_deadline_never_steps(monkeypatch):
+    trainer = tiny_trainer()
+    elapsed = 0
+    monkeypatch.setattr("nano_areal.archon.s4_update.time.monotonic", lambda: elapsed)
+    trainer.response_group_logprobs = lambda trajectories: [
+        trainer.response_logprobs(trajectory) for trajectory in trajectories]
+
+    def snapshot(stage):
+        nonlocal elapsed
+        if stage == "backward":
+            elapsed = 601
+
+    with pytest.raises(TimeoutError, match="wall-clock"):
+        bounded_step(trainer, episodes([0.0, 1.0]), snapshot)
+    assert trainer.optimizer.state == {}
+    assert trainer.model.adapter.tolist() == [0.0, 0.0]
 
 
 @pytest.mark.parametrize("field,value", [

@@ -54,7 +54,7 @@ def cached_text_logprobs(
     model, trajectory, before_segment=None, project_head=None, state=None,
     observe=None,
     attention_kernel=None, activate_segment=None, checkpoint_layers=False,
-    score_response=True, decode_chunk_size=1,
+    score_response=True, decode_chunk_size=1, checkpoint_head=False,
 ):
     if not 1 <= decode_chunk_size <= 16:
         raise ValueError("Decode checkpoint chunks must contain 1 to 16 tokens")
@@ -157,15 +157,22 @@ def cached_text_logprobs(
             continue
         offsets = [end - start - 1] if end == prompt else range(end - start)
         for offset in offsets:
-            final_hidden = model.language_model.norm(hidden[:, offset:offset + 1])
-            if project_head is None:
-                weight = (model.language_model.embed_tokens.weight if model.tied
-                          else model.lm_head.weight)
-                logits = F.linear(final_hidden, weight)
+            def score(hidden, target, position=start + offset):
+                final_hidden = model.language_model.norm(hidden)
+                if project_head is None:
+                    weight = (model.language_model.embed_tokens.weight if model.tied
+                              else model.lm_head.weight)
+                    logits = F.linear(final_hidden, weight)
+                else:
+                    logits = project_head(final_hidden, position, position + 1)
+                return logits.float().log_softmax(-1).gather(-1, target).squeeze(-1)
+
+            arguments = (hidden[:, offset:offset + 1],
+                         ids[:, start + offset + 1:start + offset + 2, None])
+            if checkpoint_head and model.training and torch.is_grad_enabled():
+                scores.append(checkpoint(score, *arguments, use_reentrant=False))
             else:
-                logits = project_head(final_hidden, start + offset, start + offset + 1)
-            scores.append(logits.float().log_softmax(-1).gather(
-                -1, ids[:, start + offset + 1:start + offset + 2, None]).squeeze(-1))
+                scores.append(score(*arguments))
     if state is not None:
         state.update(cache=cache, input_ids=trajectory.input_ids[:-1].tolist(),
                      reused_tokens=reused)

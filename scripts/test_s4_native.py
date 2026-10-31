@@ -19,7 +19,7 @@ def aligned_fixture():
     config = tiny_config().to_dict()
     config["text_config"].update(hidden_size=128, head_dim=128, num_attention_heads=1,
                                   num_key_value_heads=1, intermediate_size=256,
-                                  num_hidden_layers=2)
+                                  num_hidden_layers=2, vocab_size=256)
     config["tie_word_embeddings"] = True
     config["vision_config"]["out_hidden_size"] = 128
     model = Qwen3VLModel(config).to(device="mps", dtype=torch.bfloat16)
@@ -102,6 +102,56 @@ def test_bound_runtime_rejects_incomplete_projection_coverage():
     with pytest.raises(ValueError, match="coverage differs"):
         AlignedS4Runtime(trainer, quantized, episodes)
     assert not hasattr(trainer, "select_turn")
+
+
+def test_group_schedule_matches_complete_history_replay_gradients():
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        trainer.model.train()
+        expected_values = []
+        for index, trajectory in enumerate(runtime.history):
+            runtime.select_turn(index)
+            current = trainer.response_logprobs(trajectory)
+            expected_values.append(current.detach())
+            (current.sum() * (index + 1)).backward()
+        expected_gradients = {name: parameter.grad.clone()
+                              for name, parameter in trainer.parameters.items()}
+        for parameter in trainer.parameters.values():
+            parameter.grad = None
+        saved_shapes = []
+
+        def pack(tensor):
+            saved_shapes.append(tensor.shape)
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            currents = trainer.response_group_logprobs(runtime.history)
+        assert not runtime.states and not runtime.group_replay
+        vocab_size = trainer.model.config["text_config"]["vocab_size"]
+        assert not any(shape == (1, 1, vocab_size)
+                       for shape in saved_shapes)
+        for actual, expected in zip(currents, expected_values, strict=True):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        sum(current.sum() * (index + 1)
+            for index, current in enumerate(currents)).backward()
+        actual_gradient = torch.cat([parameter.grad.flatten()
+                                     for parameter in trainer.parameters.values()])
+        expected_gradient = torch.cat([value.flatten()
+                                       for value in expected_gradients.values()])
+        assert bool(torch.isfinite(actual_gradient).all())
+        relative_error = (actual_gradient - expected_gradient).norm()
+        assert float(relative_error / expected_gradient.norm()) <= 1 / 128
+        torch.testing.assert_close(
+            actual_gradient, expected_gradient, rtol=1 / 128,
+            atol=float(expected_gradient.abs().max()) / 128)
+        assert any(bool(parameter.grad.abs().any())
+                   for parameter in trainer.parameters.values())
+        with pytest.raises(ValueError, match="complete declared"):
+            trainer.response_group_logprobs(runtime.history[:-1])
+    finally:
+        runtime.close()
+    assert not hasattr(trainer, "response_group_logprobs")
 
 
 def test_bound_head_shares_fp32_bias_storage_across_differentiable_tokens():

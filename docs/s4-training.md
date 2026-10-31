@@ -1,5 +1,31 @@
 # S4 production policy preflight: October 31, 2026
 
+## Continue12: whole-group shared autograd scheduling
+
+The opt-in native runtime now evaluates a complete declared group with shared
+prefix/KV autograd and one episode-balanced backward, instead of reconstructing
+turn-zero history for every independent backward. Non-reentrant checkpoints
+also cover each token's final normalization, affine head and log-softmax, so
+the whole group does not retain vocabulary-sized score intermediates. Frozen
+reference and differentiable policy graphs remain separate. No historical KV
+is detached; projection/attention arithmetic, official rewards, allocation
+limits, the **0.01** MAE threshold and independent **600-second** phase budgets
+are unchanged. The operator revision **native-s4-affine-cache-r5** is not
+adapter version v1.
+
+Regression tests compare shared versus independent complete-history values
+and gradients in fp32, check native bf16 gradient norm error within **1/128**,
+reject retained vocabulary-sized head intermediates, verify identical
+episode-balanced optimizer results, and reject an update after its backward
+deadline. Existing causal-gradient and retained-KV tests are unchanged.
+
+The source-bound original sampled /0 preflight reproduces exactly **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 response tokens**, in
+**187.73480583401397 seconds** (`policy-continue12-group-0/preflight.json`).
+Unchanged rewards **[1,1]** / advantages **[0,0]** still block that group's
+update. The complete /10 bounded measurement is pending; implementation and
+small-model tests are not full S4 training or memory acceptance.
+
 ## Continue11: persistent differentiable KV blocks
 
 `cd7472b` replaces retained full-cache checkpoint inputs with immutable linked
