@@ -1,5 +1,38 @@
 # S4 production policy preflight: October 31, 2026
 
+## Latest closeout: continue12, updates remain zero
+
+Committed runtime **native-s4-affine-cache-r13** shares a complete group's
+autograd history, performs one episode-balanced backward, checkpoints token
+heads, batches frozen-linear/full-KV attention gradients, and selectively
+retains frozen decode MLP products. Historical KV remains differentiable.
+Milestones: `8fac0a4`, `7685e5d`, `b1b6bf0`, `1604c0a`, `c681898`, `2c8e77f`.
+S1/S2/S3 and bounded coding acceptance remain unchanged.
+
+Source-bound original /0 remains **0.009696634512675821 <= 0.01**;
+the unchanged informative whole /10 remains **0.007422680729897122 <= 0.01**,
+official rewards **[1,0]**, advantages **[1,-1]**, **9 turns / 1338 tokens**.
+The final qualified schedule completes all nine forwards in
+**358.38379254200845 seconds**, then reaches the unchanged **600-second**
+deadline during its single backward. Driver peak **26,786,611,200 bytes**
+is within **26,800,603,136**, but swap grows **123.44 MiB**: memory also fails.
+No complete backward, optimizer step, changed adapter, immutable v1 or v1
+feedback is qualified. **Full S4 training is NOT accepted; Updates = 0.**
+
+Faster r14/r15 native Metal attention experiments fail the original /0 gate
+and are not promoted. Their patches and reports remain under `artifacts/s4`;
+the working source is restored exactly to the qualified r13 commit. Sampling
+is unchanged at **36/81 successes, all 45 failures retained**; /20 and /54
+remain unstarted. No production server was launched in continue12. Remaining
+work is a numerically qualified complete-history schedule that finishes the
+backward, optimizer and export inside the existing runtime/device/no-swap
+bounds, followed by fresh production-v1 and native-v1 feedback.
+
+After restoring r13, the final full suite passes **187 tests in 12.72s**
+(one inspection-only selective-checkpoint warning). Current native/probe,
+original /0 and whole /10 evidence hashes and all immutable v0 model/adapter
+files verify (`artifacts/s4/continue12-final-bindings.json`).
+
 ## Continue12: whole-group shared autograd scheduling
 
 The opt-in native runtime now evaluates a complete declared group with shared
@@ -233,7 +266,65 @@ warning; targeted Ruff and diff checks pass. The operator revision
 Its source-bound original /0 preflight exactly repeats **MAE
 0.009696634512675821 <= 0.01**, all **9 turns / 636 tokens**, in
 **168.36215929102036 seconds** (`policy-continue12-all-products-0`); native and
-probe source hashes verify. Whole /10 and bounded update measurement is pending.
+probe source hashes verify.
+
+The r13 whole /10 update again repeats exactly **MAE 0.007422680729897122**.
+All nine forwards finish in **358.38379254200845 seconds**, with **3528**
+layer-segment activations. At the unchanged update deadline, the counter is
+**6017**: **2489** backward recomputation entries, including the final entry
+rejected before execution. This is not a completed backward or optimizer step.
+The last entry is positions **1917:1933**, prompt length **1869**, at
+**600.0551237909822 seconds**. Final **status=error**, **Updates = 0**, elapsed
+**938.2491780830023 seconds**, cleanup succeeds.
+
+The **8567** valid samples record allocated peak **23,932,129,536**, driver
+**26,786,611,200 <= 26,800,603,136 bytes**, RSS **1,455,210,496 bytes**.
+Swap grows **4798.00 -> 4921.44 MiB**, **+123.44 MiB**, so the partial memory
+gate **fails**. Full MLP retention does not close either acceptance gate.
+
+### r14 native Metal Split-KV forward
+
+The next native forward fuses tokenwise Split-KV attention into two Metal
+kernels. It uses 16-token online-softmax blocks, eight warp states per
+512-token partition, fp32 max/sum/accumulator state, bf16 normalized partition
+outputs, and a rescaled cross-partition combination. Each query has its own
+causal context limit, including within a 16-row checkpoint. The output's
+autograd wrapper still returns complete query/key/value gradients using the
+same native batched differentiable Split-KV formula. No historical KV or saved
+autograd input is detached; this is not a production-reference gradient.
+
+The isolated native Metal output passes the existing independent production
+MLX paged-attention control at its unchanged **mean error < 2e-6 / max < 0.002**.
+New MPS tests cross partition boundaries, verify the full input gradients
+exactly against the native batched derivative, require nonzero historical and
+zero future value gradients, and reject direct forward-only use with autograd.
+Native retention returns to **gate/down only**, as r12 has the better measured
+memory boundary. **189 tests pass in 11.41 seconds**, with the existing
+inspection-only checkpoint warning; targeted Ruff and diff checks pass.
+**native-s4-affine-cache-r14** is an operator revision, not adapter v1.
+The source-bound original /0 probe **fails**, **MAE
+0.010698827859248567 > 0.01**, **137.17782754200744 seconds**
+(`policy-continue12-metal-0`). Passing an isolated production operator control
+does not promote this operator through the whole-policy gate. No update is
+attempted. Its source patch is retained as `continue12-r14-source.patch`
+against `2c8e77f` under `artifacts/s4/`.
+
+### r15 offline partition reduction candidate
+
+The next fused candidate uses a partition-wide max/exp-sum reduction and
+four-lane value accumulation, matching the native diagnostic's offline
+Split-KV formula rather than r14's online block updates. It preserves bf16
+partition output rounding, causal limits, complete native Q/K/V backward and
+gate/down-only checkpoint retention. The online implementation remains an
+explicit diagnostic variant. **35 targeted native/operator tests pass**, with
+the unchanged isolated MLX error bounds and exact native input-gradient checks.
+**native-s4-affine-cache-r15** is not adapter v1. Its source-bound original /0
+probe **fails**, **MAE 0.011031304884397384 > 0.01**, elapsed
+**136.11917720799102 seconds** (`policy-continue12-metal-offline-0`). No /10
+update is attempted. Its source patch is retained as
+`artifacts/s4/continue12-r15-source.patch` against `2c8e77f`. Both Metal
+candidates are removed from the working source, restoring committed r13
+exactly; isolated operator controls do not override failed policy parity.
 
 ## Continue11: persistent differentiable KV blocks
 

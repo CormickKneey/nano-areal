@@ -2,6 +2,19 @@
 
 ## Status: bounded coding gate passes; training remains unaccepted
 
+Continue12 replaces repeated per-turn backwards with complete-group shared
+autograd, token-head checkpoints, batched frozen-linear/full-KV attention
+gradients and selective frozen MLP product retention. No historical KV is
+detached. Committed r13 (`2c8e77f`) requalifies original /0 at
+**0.009696634512675821** and exact whole /10 at **0.007422680729897122**,
+both below unchanged **0.01**. Nine forwards finish in **358.38379254200845s**,
+but the single backward still reaches **600s** before an optimizer step.
+Driver peak **26,786,611,200 <= 26,800,603,136 bytes**; swap **+123.44 MiB**
+fails the no-growth gate. Faster r14/r15 Metal attention fails whole-policy
+parity and is archived, not promoted. **Updates = 0; no v1 or feedback**.
+Sampling stays **36/81 successes, 45 failures retained**. See
+[continue12 measurements and historical failures](s4-training.md).
+
 Continue11 bounds retained KV storage with persistent differentiable blocks,
 shares the frozen fp32 head biases, and groups sequential decode arithmetic
 inside 16-token layer checkpoints. No historical KV is detached. Final r4
