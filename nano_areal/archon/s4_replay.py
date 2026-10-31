@@ -54,8 +54,10 @@ def cached_text_logprobs(
     model, trajectory, before_segment=None, project_head=None, state=None,
     observe=None,
     attention_kernel=None, activate_segment=None, checkpoint_layers=False,
-    score_response=True,
+    score_response=True, decode_chunk_size=1,
 ):
+    if not 1 <= decode_chunk_size <= 16:
+        raise ValueError("Decode checkpoint chunks must contain 1 to 16 tokens")
     if trajectory.pixel_values is not None:
         raise ValueError("Cached diagnostic supports text only")
     ids = trajectory.input_ids
@@ -77,8 +79,9 @@ def cached_text_logprobs(
              [None] * len(model.language_model.layers))
     ids = ids.to(device).unsqueeze(0)
     scores = []
-    segments = [(reused, prompt), *[(index, index + 1)
-                               for index in range(prompt, ids.shape[1] - 1)]]
+    segments = [(reused, prompt), *[
+        (index, min(index + decode_chunk_size, ids.shape[1] - 1))
+        for index in range(prompt, ids.shape[1] - 1, decode_chunk_size)]]
     for start, end in segments:
         if before_segment is not None:
             before_segment(start, end)
@@ -86,45 +89,62 @@ def cached_text_logprobs(
         position_ids = torch.arange(start, end, device=device)[None, None].expand(
             3, 1, -1)
         cos, sin = model.language_model.rope(position_ids, hidden.dtype)
-        length = end - start
-        attention_mask = None
-        if start and length > 1:
-            attention_mask = (torch.arange(end, device=device)[None, :]
-                              <= torch.arange(start, end, device=device)[:, None])
         for index, layer in enumerate(model.language_model.layers):
             def forward_layer(hidden, history, layer=layer, index=index,
-                              start=start, end=end, length=length, cos=cos, sin=sin,
-                              attention_mask=attention_mask):
-                if activate_segment is not None:
-                    activate_segment(start, end, prompt)
-                attention = layer.attn
-                normalized = layer.input_layernorm(hidden)
-                query = attention.q_norm(attention.q_proj(normalized).view(
-                    1, length, attention.n_heads, attention.head_dim))
-                key = attention.k_norm(attention.k_proj(normalized).view(
-                    1, length, attention.n_kv_heads, attention.head_dim))
-                value = attention.v_proj(normalized).view(
-                    1, length, attention.n_kv_heads, attention.head_dim)
-                query, key = native_model.apply_rope(query, key, cos, sin)
-                if observe is not None:
-                    observe(f"layers.{index}.attn.rope_query", query)
-                    observe(f"layers.{index}.attn.rope_key", key)
-                key, value = key.transpose(1, 2), value.transpose(1, 2)
-                new_key, new_value = key, value
+                              start=start, end=end, cos=cos, sin=sin):
+                old_key, old_value = None, None
                 if history is not None:
                     keys, values = history.tensors()
-                    key = torch.cat((*keys, key), dim=-2)
-                    value = torch.cat((*values, value), dim=-2)
-                kernel = attention_kernel or F.scaled_dot_product_attention
-                attended = kernel(
-                    query.transpose(1, 2),
-                    key.repeat_interleave(attention.n_rep, dim=1),
-                    value.repeat_interleave(attention.n_rep, dim=1),
-                    attn_mask=attention_mask, is_causal=start == 0,
-                ).transpose(1, 2).contiguous().view(1, length, -1)
-                hidden = hidden + attention.o_proj(attended)
-                hidden = hidden + layer.mlp(layer.post_attention_layernorm(hidden))
-                return hidden, new_key, new_value
+                    old_key = torch.cat(keys, dim=-2)
+                    old_value = torch.cat(values, dim=-2)
+                outputs, new_keys, new_values = [], [], []
+                fragments = ([(0, end - start)] if end == prompt else
+                             [(offset, offset + 1) for offset in range(end - start)])
+                for offset, stop in fragments:
+                    fragment_start, fragment_end = start + offset, start + stop
+                    if activate_segment is not None:
+                        activate_segment(fragment_start, fragment_end, prompt)
+                    fragment = hidden[:, offset:stop]
+                    length = stop - offset
+                    attention = layer.attn
+                    normalized = layer.input_layernorm(fragment)
+                    query = attention.q_norm(attention.q_proj(normalized).view(
+                        1, length, attention.n_heads, attention.head_dim))
+                    key = attention.k_norm(attention.k_proj(normalized).view(
+                        1, length, attention.n_kv_heads, attention.head_dim))
+                    value = attention.v_proj(normalized).view(
+                        1, length, attention.n_kv_heads, attention.head_dim)
+                    query, key = native_model.apply_rope(
+                        query, key, cos[:, offset:stop], sin[:, offset:stop])
+                    if observe is not None:
+                        observe(f"layers.{index}.attn.rope_query", query)
+                        observe(f"layers.{index}.attn.rope_key", key)
+                    key, value = key.transpose(1, 2), value.transpose(1, 2)
+                    new_keys.append(key)
+                    new_values.append(value)
+                    if old_key is not None:
+                        key = torch.cat((old_key, key), dim=-2)
+                        value = torch.cat((old_value, value), dim=-2)
+                    attention_mask = None
+                    if fragment_start and length > 1:
+                        attention_mask = (
+                            torch.arange(fragment_end, device=device)[None, :]
+                            <= torch.arange(fragment_start, fragment_end,
+                                            device=device)[:, None])
+                    kernel = attention_kernel or F.scaled_dot_product_attention
+                    attended = kernel(
+                        query.transpose(1, 2),
+                        key.repeat_interleave(attention.n_rep, dim=1),
+                        value.repeat_interleave(attention.n_rep, dim=1),
+                        attn_mask=attention_mask, is_causal=fragment_start == 0,
+                    ).transpose(1, 2).contiguous().view(1, length, -1)
+                    fragment = fragment + attention.o_proj(attended)
+                    fragment = fragment + layer.mlp(
+                        layer.post_attention_layernorm(fragment))
+                    outputs.append(fragment)
+                    old_key, old_value = key, value
+                return (torch.cat(outputs, dim=1), torch.cat(new_keys, dim=-2),
+                        torch.cat(new_values, dim=-2))
 
             history = cache[index]
             if checkpoint_layers and model.training and torch.is_grad_enabled():
@@ -135,15 +155,17 @@ def cached_text_logprobs(
             cache[index] = CacheBlock(key, value, history)
         if not score_response:
             continue
-        hidden = model.language_model.norm(hidden[:, -1:])
-        if project_head is None:
-            weight = (model.language_model.embed_tokens.weight if model.tied
-                      else model.lm_head.weight)
-            logits = F.linear(hidden, weight)
-        else:
-            logits = project_head(hidden, start, end)
-        scores.append(logits.float().log_softmax(-1).gather(
-            -1, ids[:, end:end + 1, None]).squeeze(-1))
+        offsets = [end - start - 1] if end == prompt else range(end - start)
+        for offset in offsets:
+            final_hidden = model.language_model.norm(hidden[:, offset:offset + 1])
+            if project_head is None:
+                weight = (model.language_model.embed_tokens.weight if model.tied
+                          else model.lm_head.weight)
+                logits = F.linear(final_hidden, weight)
+            else:
+                logits = project_head(final_hidden, start + offset, start + offset + 1)
+            scores.append(logits.float().log_softmax(-1).gather(
+                -1, ids[:, start + offset + 1:start + offset + 2, None]).squeeze(-1))
     if state is not None:
         state.update(cache=cache, input_ids=trajectory.input_ids[:-1].tolist(),
                      reused_tokens=reused)

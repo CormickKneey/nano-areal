@@ -112,7 +112,8 @@ def test_cached_native_rejects_multimodal_and_noncontiguous_turns():
         cached_text_logprobs(model, trajectory)
 
 
-def test_checkpoint_chunks_preserve_cross_turn_gradients_and_linear_storage():
+@pytest.mark.parametrize("chunk_size", [1, 4, 16])
+def test_checkpoint_chunks_preserve_cross_turn_gradients_and_linear_storage(chunk_size):
     torch.manual_seed(61)
     model = Qwen3VLModel(tiny_config().to_dict()).float().train()
     add_lora(model)
@@ -125,7 +126,7 @@ def test_checkpoint_chunks_preserve_cross_turn_gradients_and_linear_storage():
     for index, trajectory in enumerate(trajectories):
         current = cached_text_logprobs(
             model, trajectory, state=state, checkpoint_layers=True,
-            score_response=index == 1)
+            score_response=index == 1, decode_chunk_size=chunk_size)
         if index == 0:
             historical_value = state["cache"][0].prefix(32).value
             historical_value.retain_grad()
@@ -133,7 +134,9 @@ def test_checkpoint_chunks_preserve_cross_turn_gradients_and_linear_storage():
     for block in state["cache"]:
         keys, values = block.tensors()
         assert sum(key.shape[-2] for key in keys) == 79
-        assert [key.shape[-2] for key in keys] == [32, 32, *([1] * 15)]
+        assert [key.shape[-2] for key in keys] == [
+            32, 32, *([chunk_size] * (15 // chunk_size)),
+            *([15 % chunk_size] if 15 % chunk_size else [])]
         assert sum(value.numel() for value in values) == sum(
             key.numel() for key in keys)
     current.sum().backward()

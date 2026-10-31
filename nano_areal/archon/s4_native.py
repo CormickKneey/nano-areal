@@ -190,18 +190,19 @@ class AlignedS4Runtime:
                 self.trainer.model, self.history[index], project_head=self.project_head,
                 state=state, attention_kernel=self.attention,
                 activate_segment=self.activate_segment, checkpoint_layers=True,
-                score_response=index == self.index,
+                score_response=index == self.index, decode_chunk_size=16,
             )
         if differentiating:
-            self.states.clear()
+            self.states.pop(enabled, None)
         else:
             self.states[enabled] = self.index, state
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r3",
+        return {"name": "native-s4-affine-cache-r4",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
+                "decode_checkpoint_chunk_size": 16,
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",
                 "gradients": "Recompute complete cache history, no detached prefix KV; "

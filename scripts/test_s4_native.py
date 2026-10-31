@@ -58,9 +58,16 @@ def test_bound_native_checkpoint_cache_has_complete_history_gradients():
             for index in range(2):
                 runtime.select_turn(index)
                 observed = trainer.response_logprobs(runtime.history[index])
+        with torch.no_grad(), trainer.model.disable_adapter():
+            runtime.select_turn(0)
+            trainer.response_logprobs(runtime.history[0])
+        reference_states = {enabled: state for enabled, state in runtime.states.items()
+                            if not any(enabled)}
+        assert len(reference_states) == 1
         trainer.model.train()
         runtime.select_turn(1)
         current = trainer.response_logprobs(runtime.history[1])
+        assert runtime.states == reference_states
         torch.testing.assert_close(current, observed, rtol=0, atol=0)
         current.sum().backward()
         checkpoint_gradients = {name: parameter.grad.clone()
