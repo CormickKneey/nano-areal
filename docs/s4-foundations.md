@@ -1,6 +1,25 @@
-# S4 dsh / nano-swe foundations: October 30, 2026
+# S4 dsh / nano-swe foundations: October 31, 2026
 
 ## Status: bounded coding gate passes; training remains unaccepted
+
+Continue11 bounds retained KV storage with persistent differentiable blocks,
+shares the frozen fp32 head biases, and groups sequential decode arithmetic
+inside 16-token layer checkpoints. No historical KV is detached. Final r4
+source-bound original /0 and exact whole /10 MAEs reproduce exactly
+**0.009696634512675821** and **0.007422680729897122**, respectively, against
+the unchanged **0.01** bound. **161 tests pass**. The final bounded update
+completes two backwards and a third forward without OOM, then hits the
+unchanged **600-second update-phase deadline** in the third backward.
+**Updates remain 0**; no v1 adapter or production-v1 feedback exists.
+
+Its partial-run sampled driver peak is **26,780,319,744 bytes**, below the
+unchanged **26,800,603,136-byte** budget, with swap delta **-312.0 MiB**.
+The report's `memory_gate.passed=true` covers only the interrupted trajectory,
+**not** complete backward/optimizer/export qualification. Complete-history
+replay scheduling/runtime is now the immediate blocker, not permission to
+extend budgets or detach KV. Sampling remains **36/81 successes, 45 failures
+retained**, with no new starts. See [continue11 evidence](s4-training.md).
+All owned serving/native processes are stopped. **Full S4 is NOT accepted.**
 
 Continue10 obtains the first informative COMPLETE whole group: HumanEval/10
 has unchanged external rewards **[1,0]**, advantages **[1,-1]**, strict

@@ -1,4 +1,164 @@
-# S4 production policy preflight: October 30, 2026
+# S4 production policy preflight: October 31, 2026
+
+## Continue11: persistent differentiable KV blocks
+
+`cd7472b` replaces retained full-cache checkpoint inputs with immutable linked
+KV blocks. Each layer returns only its new key/value block; complete history
+is concatenated **inside** its non-reentrant checkpoint and reconstructed
+during backward. Prefix reuse slices the original blocks without detaching
+them. This bounds retained KV tensor storage to the generated history rather
+than retaining a full concatenation for every decoded token. It does not
+change attention, projections, rounding, rewards, or allocation limits.
+
+The operator revision is **native-s4-affine-cache-r2**, not adapter version v1.
+CPU regression coverage compares multi-turn checkpointed values and all
+adapter gradients with a full causal forward, verifies nonzero gradients on
+the reused historical value block, checks linear block storage, and exercises
+more than 1000 linked blocks without recursive traversal. Existing native MPS
+checkpoint-gradient tests still pass. **158 tests pass in 13.21 seconds**;
+targeted Ruff and `git diff --check` pass.
+
+The source-bound original sampled /0 confirmation reproduces exactly **MAE
+0.009696634512675821 <= 0.01**, all **9 turns / 636 response tokens**, in
+**207.98193591699237 seconds**
+(`policy-continue11-chunks-0/preflight.json`). Its unchanged rewards **[1,1]**
+and advantages **[0,0]** still block updating that group. This is a numerical
+confirmation, not a no-swap memory qualification: system swap grows during
+that preflight.
+
+The first r2 update probe (`policy-continue11-chunks-update-10/update.json`)
+independently reproduces the exact whole /10 MAE **0.007422680729897122**.
+Its first forward drops to **18,932,501,504 allocated / 21,375,959,040 driver
+bytes**, versus continue10's **22,302,444,544 / 23,590,551,552**. First backward
+is **17,992,641,024 / 21,378,056,192 bytes**. However, the second differentiable
+turn still OOMs, now at the output-head `logits.float()` allocation. The final
+report records **status=error, updates=0**, **662.6399107500038 seconds**
+including the full preflight, sampled driver peak **26,803,388,416** versus
+budget **26,800,603,136 bytes**, and swap growth **999.37 MiB**. Its sampler
+retains **5982** valid samples; both the primary OOM and cleanup OOM survive.
+This is a failed memory gate, not an optimizer or export qualification.
+
+Inspection identifies a separate retained allocation: the head's frozen bf16
+affine biases are converted to fp32 separately for every scored token, and
+linear backward retains each conversion. The follow-up **r3** runtime stores
+one shared fp32 head-bias tensor. It is exactly the same value previously
+produced by `.float()`; neither forward arithmetic nor gradients are replaced.
+A saved-tensor regression checks shared storage across differentiable tokens
+and exact forward/gradient equality with the original conversion path.
+`437d236` records this follow-up; **159 tests pass in 11.18 seconds**, with
+targeted Ruff and `git diff --check` passing. The fresh r3 original /0
+confirmation (`policy-continue11-shared-head-0/preflight.json`) again yields
+exactly **0.009696634512675821 MAE**, all **9 turns / 636 response tokens**,
+in **204.15084787501837 seconds**. Its homogeneous rewards remain unchanged.
+The r3 whole /10 bounded probe again reproduces exactly
+**0.007422680729897122 MAE**. It completes the first **two** backwards without
+OOM, then hits the unchanged **600-second update-phase deadline** during the
+third differentiable turn. Its final report is **status=error, updates=0**,
+**1048.0352956249844 seconds** including preflight. The sampled allocated /
+driver peaks are **19,398,518,528 / 26,782,416,896 bytes**, below the unchanged
+**26,800,603,136-byte** driver budget, with swap delta **-1534.88 MiB** and
+**9524** valid samples. Its partial-run `memory_gate.passed=true` is **not**
+complete backward/optimizer/export memory qualification: no optimizer or
+export is reached. Evidence: `policy-continue11-shared-head-update-10`.
+
+The next **r4** runtime groups up to **16** decode tokens inside each layer
+checkpoint. Arithmetic remains sequential one-token projection, attention,
+MLP and head evaluation, not batched GEMM or full-causal substitution. Each
+checkpoint concatenates earlier blocks once, extends its local full cache
+sequentially, and returns only the new block. This reduces the backward
+fan-out from per-token concatenations into all prior individual token blocks.
+Frozen adapter-disabled reference caches also survive differentiable current
+evaluations; current-policy graphs are still reconstructed in full, and
+`start_update()` clears all preflight caches. Tests compare chunk sizes 1, 4
+and 16 with full causal values and adapter gradients, retain explicit nonzero
+historical gradients, and check frozen-reference cache preservation.
+**161 tests pass in 9.62 seconds**; targeted Ruff and `git diff --check` pass.
+`5eeb63e` records r4. Its source-bound original /0 confirmation
+(`policy-continue11-grouped-0/preflight.json`) reproduces exactly
+**0.009696634512675821 MAE**, all **9 turns / 636 tokens**, in
+**188.55584724998334 seconds**. The independent whole /10 update probe remains
+the gate for backward, optimizer/export, memory and eventual production-v1
+feedback; no deadline or allocation bound is changed.
+
+### Final r4 bounded result: update-phase runtime blocks acceptance
+
+`policy-continue11-grouped-update-10/update.json` independently reproduces
+the exact whole /10 **MAE 0.007422680729897122**, unchanged rewards **[1,0]**
+and advantages **[1,-1]**, all **9 turns / 1338 response tokens**. It completes
+two backwards and the third forward, then times out during checkpoint
+recomputation in the third backward at the unchanged **600-second** phase
+limit. Final status is **error**, **Updates = 0**, total elapsed
+**975.4926384160062 seconds** including its numerical preflight and cleanup.
+Cleanup succeeds; the timeout is retained rather than a stale success status.
+
+| Stage | MPS allocated bytes | MPS driver bytes |
+|---|---:|---:|
+| First forward | 18,608,835,584 | 21,384,347,648 |
+| First backward | 18,190,821,888 | 22,460,186,624 |
+| Second forward | 19,094,518,272 | 22,726,524,928 |
+| Second backward | 18,282,984,960 | 22,846,062,592 |
+| Third forward | 19,029,800,704 | 22,843,965,440 |
+
+The **8803** valid 100ms samples record allocated peak **20,515,623,424** and
+driver peak **26,780,319,744 bytes**, below the unchanged recommended budget
+**26,800,603,136 bytes**. Swap decreases **4798.62 -> 4486.62 MiB**
+(**-312.0 MiB**). Consequently the report's **partial-run**
+`memory_gate.passed=true`, but this does **not** qualify complete backward,
+optimizer or export memory: those phases have not all completed. First/second
+backwards and the subsequent forward now survive the old second-turn OOM;
+no full S4 memory acceptance follows from that improvement.
+
+There is **no changed adapter, immutable v1, optimizer step or production-v1
+feedback**. No new rollout starts occur: engineering accounting remains
+**36/81 successes, all 45 failures retained**; /20 and /54 remain unstarted.
+S1, S2 and accepted S3/bounded coding gates are unchanged. Owned serving and
+native processes are stopped; port 8000 is not listening.
+
+Final validation: **161 tests pass in 10.57 seconds**, targeted Ruff and
+`git diff --check` pass. Both final r4 reports' native/probe/policy/group
+source and evidence hashes verify against current files; original immutable
+v0 checkpoint/adapter/policy hashes verify. No v1 files exist in either output.
+
+Next, reduce complete-history replay/backward scheduling cost without
+detaching historical KV, weakening source binding or extending either phase
+budget. In particular, the current differentiable response call rebuilds
+history from turn zero for each separately backpropagated turn. A complete
+group-level autograd schedule needs its own gradient-equivalence and memory
+tests before replacing that path. Requalify original /0 and whole /10 after
+any further native/probe/update changes, then complete exactly one bounded
+step, exact changed immutable export and fresh production/native-v1 feedback.
+**Full S4 training remains NOT accepted.**
+
+### Reproduce the r4 boundary
+
+Run only with the owned API and engine stopped. Use a fresh output directory;
+do not overwrite existing reports, adapters or policy manifests.
+
+```bash
+export HF_HOME="$PWD/.s1-cache/hf" HF_HUB_OFFLINE=1
+export UV_CACHE_DIR="$PWD/.s1-cache/uv" TMPDIR="$PWD/.s1-cache/tmp"
+export XDG_CACHE_HOME="$PWD/.s1-cache/xdg" PYTHONPATH=.
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO=1.0
+export PYTORCH_MPS_LOW_WATERMARK_RATIO=0.9
+OUT=artifacts/s4/policy-continue11-reproduce
+mkdir "$OUT"
+cp artifacts/s4/policy-aligned/policy-v0.json "$OUT/policy-v0.json"
+ln -s "$PWD/artifacts/s4/policy-aligned/adapter-v0" "$OUT/adapter-v0"
+uv run --no-project --python .venv/bin/python python \
+  scripts/probe_s4_training.py update \
+  --infer-model .s1-cache/models/Qwen3-VL-4B-Instruct-4bit \
+  --train-model .s1-cache/models/Qwen3-VL-4B-Instruct-aligned \
+  --output "$OUT" --group artifacts/s4/policy-continue10-10 \
+  --aligned-arithmetic
+```
+
+For original /0 source requalification, select `preflight` and group
+`artifacts/s4/policy-sampled-0` in another fresh output directory. Exit 2 is
+expected for its homogeneous rewards even when the numerical gate passes.
+
+All continue10 failures and historical numerical measurements below remain
+unchanged. Full S4 training is not accepted without the measured remaining
+update, export, feedback and memory gates.
 
 ## Continue10: first informative complete whole group
 
