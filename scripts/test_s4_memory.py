@@ -85,8 +85,10 @@ def test_sampler_failure_preserves_primary_error_report(
         raise RuntimeError("Cleanup failed")
 
     binding = SimpleNamespace(
+        version=0,
         verify_files=lambda: None,
-        manifest={"training_files": {}, "inference_files": {}},
+        manifest={"training_files": {}, "inference_files": {},
+                  "adapter": str(tmp_path / "adapter-v0")},
     )
     monkeypatch.setattr(sys, "argv", [
         "probe_s4_training.py", "update", "--infer-model", "unused",
