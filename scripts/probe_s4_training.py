@@ -121,6 +121,21 @@ def swap_used_mib(snapshot):
     return float(match.group(1))
 
 
+def phase_paths(output, phase, version):
+    if version < 0 or (phase == "prepare" and version != 0):
+        raise ValueError("Policy version must be nonnegative; prepare requires v0")
+    suffix = f"-v{version}" if version else ""
+    report = output / f"{phase}{suffix}.json"
+    destinations = [report]
+    if phase in {"prepare", "update"}:
+        target = version + (phase == "update")
+        destinations.extend((output / f"adapter-v{target}",
+                             output / f"policy-v{target}.json"))
+    if any(item.exists() or item.is_symlink() for item in destinations):
+        raise FileExistsError("Immutable phase evidence already exists")
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "preflight", "update"))
@@ -128,26 +143,23 @@ def main():
     parser.add_argument("--train-model", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--group", type=Path)
-    parser.add_argument("--policy-version", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--policy-version", type=int, default=0)
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
     parser.add_argument("--aligned-arithmetic", action="store_true")
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
-    if args.phase != "preflight" and args.policy_version != 0:
-        parser.error("Prepare/update only accepts v0; update creates immutable v1")
     if args.phase != "prepare" and args.group is None:
         parser.error("Preflight/update requires a complete episode group")
     if args.phase == "prepare" and args.aligned_arithmetic:
         parser.error("Aligned arithmetic requires an existing bound policy and group")
+    try:
+        path = phase_paths(args.output, args.phase, args.policy_version)
+    except (ValueError, FileExistsError) as error:
+        parser.error(str(error))
     require_stopped_server()
     args.output.mkdir(parents=True, exist_ok=True)
-    suffix = f"-v{args.policy_version}" if args.policy_version else ""
-    path = args.output / f"{args.phase}{suffix}.json"
-    if args.phase == "update" and any(item.exists() for item in (
-        path, args.output / "adapter-v1", args.output / "policy-v1.json",
-    )):
-        parser.error("Immutable update evidence already exists; do not overwrite it")
+    next_version = args.policy_version + 1
     report = {
         "status": "started", "phase": args.phase,
         "scope": "S4 native / production training preflight",
@@ -159,7 +171,8 @@ def main():
                 "PYTORCH_MPS_LOW_WATERMARK_RATIO",
             )
         },
-        "updates": 0, "elapsed_seconds": 0,
+        "updates": 0, "policy_version_before": args.policy_version,
+        "elapsed_seconds": 0,
     }
     started = time.monotonic()
     trace = MemoryTrace() if args.phase == "update" else None
@@ -171,13 +184,15 @@ def main():
 
     save()
     try:
-        if args.phase == "update" and (args.output / "adapter-v1").exists():
-            raise FileExistsError("Immutable v1 adapter already exists")
         adapter = args.output / f"adapter-v{args.policy_version}"
         manifest_path = args.output / f"policy-v{args.policy_version}.json"
         if args.phase != "prepare":
             binding = PolicyBinding.read(manifest_path)
+            if binding.version != args.policy_version:
+                raise ValueError("Requested policy version differs from bound policy")
             binding.verify_files()
+            if adapter.resolve() != Path(binding.manifest["adapter"]).resolve():
+                raise ValueError("Requested adapter differs from bound policy")
             if (checkpoint_files(args.train_model) != binding.manifest["training_files"]
                     or checkpoint_files(args.infer_model)
                     != binding.manifest["inference_files"]):
@@ -321,7 +336,7 @@ def main():
 
                 report["optimizer"] = bounded_step(trainer, episodes, snapshot)
                 report["updates"] = report["optimizer"]["optimizer_steps"]
-                changed = args.output / "adapter-v1"
+                changed = args.output / f"adapter-v{next_version}"
                 trainer.export_peft_adapter(changed)
                 snapshot("export")
                 before = file_digest(adapter / "adapter_model.safetensors")
@@ -336,11 +351,12 @@ def main():
                     raise ValueError("Updated PEFT export is not an exact roundtrip")
                 updated = PolicyBinding({
                     **{key: value for key, value in binding.manifest.items()
-                       if key != "model"}, "version": 1,
+                       if key != "model"}, "version": next_version,
                     "adapter": str(changed.resolve()),
                     "adapter_files": {str(item.resolve()): file_digest(item)
                                       for item in sorted(changed.iterdir())},
                     "parent_policy": binding.model,
+                    "parent_manifest_sha256": file_digest(manifest_path),
                     "complete_group_files": {
                         str(item.resolve()): file_digest(item)
                         for item in [args.group / "report.json", *[
@@ -349,10 +365,12 @@ def main():
                         ]]
                     },
                 })
-                updated.write(args.output / "policy-v1.json")
+                updated.write(args.output / f"policy-v{next_version}.json")
                 report.update(status="updated-exported-feedback-pending",
                               model=updated.model, adapter_sha256_before=before,
-                              adapter_sha256_after=after, adapter_roundtrip_exact=True)
+                              adapter_sha256_after=after, adapter_roundtrip_exact=True,
+                              parent_policy=binding.model,
+                              policy_version_after=next_version)
             binding.verify_files()
             if aligned_runtime is not None:
                 aligned_runtime.verify_sources()

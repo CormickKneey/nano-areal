@@ -1,12 +1,82 @@
 """Small CPU tests for episode-balanced bounded updates, without model loading."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
+import probe_s4_training
 import pytest
 import torch
+from probe_s4_training import phase_paths
 
 from nano_areal.archon.s4_update import bounded_step, trajectory_from_turn
+
+
+@pytest.mark.parametrize("version", [0, 1, 2, 14])
+def test_phase_paths_support_sequential_versions(tmp_path, version):
+    suffix = f"-v{version}" if version else ""
+    assert phase_paths(tmp_path, "update", version) == (
+        tmp_path / f"update{suffix}.json")
+    assert phase_paths(tmp_path, "preflight", version) == (
+        tmp_path / f"preflight{suffix}.json")
+
+
+@pytest.mark.parametrize("destination", ["update-v1.json", "adapter-v2",
+                                          "policy-v2.json"])
+def test_update_rejects_existing_child_evidence(tmp_path, destination):
+    (tmp_path / destination).touch()
+    with pytest.raises(FileExistsError, match="Immutable"):
+        phase_paths(tmp_path, "update", 1)
+
+
+def test_update_rejects_dangling_child_symlink(tmp_path):
+    (tmp_path / "adapter-v2").symlink_to(tmp_path / "missing")
+    with pytest.raises(FileExistsError, match="Immutable"):
+        phase_paths(tmp_path, "update", 1)
+
+
+@pytest.mark.parametrize("phase,version", [("prepare", 1), ("update", -1),
+                                           ("preflight", -1)])
+def test_phase_paths_reject_invalid_versions(phase, version):
+    with pytest.raises(ValueError, match="version"):
+        phase_paths(Path("unused"), phase, version)
+
+
+@pytest.mark.parametrize("phase", ["prepare", "preflight"])
+def test_phase_paths_never_overwrite_reports(tmp_path, phase):
+    (tmp_path / f"{phase}.json").touch()
+    with pytest.raises(FileExistsError, match="Immutable"):
+        phase_paths(tmp_path, phase, 0)
+
+
+@pytest.mark.parametrize("bound_version,message", [
+    (0, "version differs"), (1, "adapter differs"),
+])
+def test_update_rejects_wrong_parent_before_model_load(
+        tmp_path, monkeypatch, bound_version, message):
+    monkeypatch.setattr("sys.argv", [
+        "probe_s4_training.py", "update", "--policy-version", "1",
+        "--infer-model", "unused", "--train-model", "unused",
+        "--group", "unused", "--output", str(tmp_path),
+    ])
+    monkeypatch.setattr(probe_s4_training, "require_stopped_server", lambda: None)
+    monkeypatch.setattr(probe_s4_training, "memory_snapshot",
+                        lambda process: {"swap": "used = 0.00M"})
+    monkeypatch.setattr(probe_s4_training, "command_output", lambda command: "")
+    monkeypatch.setattr(probe_s4_training.PolicyBinding, "read", lambda path:
+                        SimpleNamespace(version=bound_version,
+                                        verify_files=lambda: None,
+                                        manifest={"adapter": str(tmp_path / "other")}))
+
+    def reject_model_load(*args):
+        pytest.fail("Invalid parent must be rejected before loading a model")
+
+    monkeypatch.setattr(probe_s4_training, "NativeQwen3VLLoRATrainer",
+                        reject_model_load)
+    with pytest.raises(ValueError, match=message):
+        probe_s4_training.main()
+    assert not (tmp_path / "adapter-v2").exists()
+    assert not (tmp_path / "policy-v2.json").exists()
 
 
 class TinyPolicy(torch.nn.Module):
