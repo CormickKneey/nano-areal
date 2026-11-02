@@ -146,6 +146,7 @@ def main():
     parser.add_argument("--policy-version", type=int, default=0)
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
     parser.add_argument("--aligned-arithmetic", action="store_true")
+    parser.add_argument("--precompute-reference", action="store_true")
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
@@ -153,6 +154,9 @@ def main():
         parser.error("Preflight/update requires a complete episode group")
     if args.phase == "prepare" and args.aligned_arithmetic:
         parser.error("Aligned arithmetic requires an existing bound policy and group")
+    if args.precompute_reference and (args.phase != "update"
+                                     or not args.aligned_arithmetic):
+        parser.error("Reference precomputation requires an aligned bounded update")
     try:
         path = phase_paths(args.output, args.phase, args.policy_version)
     except (ValueError, FileExistsError) as error:
@@ -313,6 +317,9 @@ def main():
             if not report["blockers"]:
                 report["status"] = "preflight-passed-no-update"
             if args.phase == "update" and not report["blockers"]:
+                if args.precompute_reference:
+                    report["reference_precompute"] = aligned_runtime.prepare_reference()
+                    save()
                 update_started = time.monotonic()
                 if aligned_runtime is not None:
                     aligned_runtime.start_update()

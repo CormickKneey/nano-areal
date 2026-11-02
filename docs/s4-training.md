@@ -101,6 +101,51 @@ subsetted, no tasks are pooled, and no numerical failure is relabeled a pass.
 No v2, second qualified update, multi-hour training or S5 acceptance is claimed
 by this preparation milestone.
 
+### Continued bounded runtime boundary and native-reference cache
+
+Further declarations expand independent fixed-task pairs to /145, /99 and /75,
+retaining failures and selecting only the first informative COMPLETE whole
+pair in each declared batch. The completed pre-cache exploration ledger is
+**49/96 v1 starts, 47 nonpassing starts retained**, not benchmark accuracy.
+Two subsequent candidates remain numerically blocked: the next /54 pair at
+**0.013916862234139073** and /75 at **0.010545575926071535**. Reapplying the
+identical archived r19 diagnostic to /75 gives **0.010630390967190435** and no
+update; r19 is restored away again, not promoted.
+
+The first numerical pass is seed-1 /75 group 2, **8 turns / 1296 tokens**,
+rewards **[0,1]**, native **MAE 0.006830364356125004 <= 0.01**. The r18 update
+still fails: the unchanged **600s** deadline interrupts at **600.002093s**,
+**updates=0**, before any optimizer. Driver peak **29,949,116,416 >
+26,800,603,136 bytes** also fails, despite swap **-9.69 MiB**. Nonzero adapters
+require a genuine frozen-base evaluation; the zero-B identity cannot replace
+it. All failures remain in `policy-continue14-v1-seed-1-update-75`.
+
+The opt-in r20 schedule adds `--precompute-reference` only for aligned bounded
+updates. It computes exactly the same disabled-adapter native reference,
+without gradients, **inside the original independent 600s preflight**. It
+records token count/hash and preflight elapsed time, releases unused cache,
+then reuses those immutable native token logprobs during the original **600s
+update**. There is no third phase, new deadline, production-reference gradient,
+historical policy-KV detachment, changed arithmetic or altered GRPO default.
+Expired preflights cannot renew their budget. Zero-B retains its verified
+identity fast path. Exact reference replay, complete-history policy gradients,
+expiry and CLI-mode controls are covered; **211 tests pass in 12.03s**.
+
+Source-bound r20 original /0 and whole /10 reproduce exactly
+**0.009696634512675821 / 0.007422680729897122**, respectively, in
+**174.811879875022 / 345.17115229100455s**. On the identical long seed-1 pair,
+r20 restores sampled memory to **26,206,765,056 bytes**, swap **-793.76 MiB**,
+but the combined policy/reference preflight itself reaches **600.042034s**.
+**No optimizer or v2 exists from that attempt**; memory passing alone does not
+qualify the update. Evidence: `policy-continue14-r20-v1-update-75`.
+
+The original seed-2 serving startup is interrupted before any episode; API
+and actual engine PID 60599 exit and port 8000 closes. Unexecuted seed batches
+resume under a fresh declaration and fresh `policy-continue14-r20-v1-seed-*`
+directories, never by shortening the long pair or extending its phase budget.
+The schedule remains opt-in preparation until a full update/export/feedback
+cycle passes; **qualified chain Updates = 1** at this milestone.
+
 ## Continue13: retain complete decode attention outputs
 
 The opt-in **native-s4-affine-cache-r16** wraps the existing tokenwise

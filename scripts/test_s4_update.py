@@ -79,6 +79,27 @@ def test_update_rejects_wrong_parent_before_model_load(
     assert not (tmp_path / "policy-v2.json").exists()
 
 
+@pytest.mark.parametrize("phase,aligned", [("preflight", True), ("update", False)])
+def test_reference_precompute_only_accepts_aligned_updates(
+        tmp_path, monkeypatch, phase, aligned):
+    arguments = ["probe_s4_training.py", phase, "--infer-model", "unused",
+                 "--train-model", "unused", "--group", "unused", "--output",
+                 str(tmp_path), "--precompute-reference"]
+    if aligned:
+        arguments.append("--aligned-arithmetic")
+    monkeypatch.setattr("sys.argv", arguments)
+
+    def reject_server_check():
+        pytest.fail("Invalid reference schedule must be rejected before model loading")
+
+    monkeypatch.setattr(probe_s4_training, "require_stopped_server",
+                        reject_server_check)
+    with pytest.raises(SystemExit) as error:
+        probe_s4_training.main()
+    assert error.value.code == 2
+    assert not list(tmp_path.iterdir())
+
+
 class TinyPolicy(torch.nn.Module):
     def __init__(self):
         super().__init__()

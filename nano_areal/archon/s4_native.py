@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 from types import MethodType
@@ -63,6 +64,7 @@ class AlignedS4Runtime:
         self.cache_reclaims = 0
         self.last_segment = None
         self.states = {}
+        self.reference_cache = None
         self.group_replay = False
         self.handles = []
         self.forwards = []
@@ -157,17 +159,64 @@ class AlignedS4Runtime:
         self.index = index
 
     def start_update(self):
-        if not any(
+        if self.reference_cache is None and not any(
             index == len(self.history) - 1 for index, state in self.states.values()
         ):
             raise ValueError(
                 "Complete the full preflight before starting the update budget"
             )
+        if time.monotonic() - self.started > 600:
+            raise TimeoutError(
+                "Aligned preflight exceeded its 600-second runtime budget")
         self.states.clear()
         self.segment_calls = 0
         self.cache_reclaims = 0
         self.last_segment = None
         self.started = time.monotonic()
+
+    def zero_adapter(self):
+        modules = [module for module in self.trainer.model.modules()
+                   if isinstance(module, qwen3vl.LoRALinear)]
+        return bool(modules) and all(
+            module.enabled and bool(torch.isfinite(module.lora_a).all())
+            and not bool(module.lora_b.detach().any()) for module in modules)
+
+    def prepare_reference(self):
+        if self.reference_cache is not None or self.trainer.model.training or not any(
+            index == len(self.history) - 1 for index, state in self.states.values()
+        ):
+            raise ValueError(
+                "Frozen reference requires the complete evaluation preflight")
+        if time.monotonic() - self.started > 600:
+            raise TimeoutError(
+                "Aligned preflight exceeded its 600-second runtime budget")
+        started = time.monotonic()
+        if self.zero_adapter():
+            return {"mode": "Exact-zero native identity; no reference cache needed",
+                    "preflight_elapsed_seconds": time.monotonic() - self.started}
+        self.states.clear()
+        torch.mps.empty_cache()
+        with torch.no_grad(), self.trainer.model.disable_adapter():
+            references = tuple(self.response_group_logprobs(self.history))
+        if any(reference.requires_grad or not bool(torch.isfinite(reference).all())
+               for reference in references):
+            raise ValueError("Frozen native reference must be finite and gradient-free")
+        digest = hashlib.sha256()
+        for reference in references:
+            digest.update(reference.cpu().contiguous().numpy().tobytes())
+        torch.mps.synchronize()
+        torch.mps.empty_cache()
+        elapsed = time.monotonic() - self.started
+        if elapsed > 600:
+            raise TimeoutError(
+                "Aligned preflight exceeded its 600-second runtime budget")
+        self.reference_cache = references
+        return {"mode": "Bound native frozen reference cached during preflight",
+                "response_tokens": sum(reference.numel() for reference in references),
+                "sha256": digest.hexdigest(), "requires_grad": False,
+                "elapsed_seconds": time.monotonic() - started,
+                "preflight_elapsed_seconds": elapsed,
+                "max_preflight_seconds": 600}
 
     def activate_segment(self, start, end, prompt):
         self.segment_calls += 1
@@ -194,14 +243,13 @@ class AlignedS4Runtime:
     def training_group_logprobs(self, trajectories, snapshot):
         if not torch.is_grad_enabled() or not self.trainer.model.training:
             raise ValueError("Training group requires enabled policy autograd")
-        modules = [module for module in self.trainer.model.modules()
-                   if isinstance(module, qwen3vl.LoRALinear)]
-        zero_adapter = bool(modules) and all(
-            module.enabled and bool(torch.isfinite(module.lora_a).all())
-            and not bool(module.lora_b.detach().any()) for module in modules)
+        zero_adapter = self.zero_adapter()
         currents = self.response_group_logprobs(
             trajectories, lambda: snapshot("forward"))
-        if zero_adapter:
+        if self.reference_cache is not None:
+            references = self.reference_cache
+            mode = "Bound native frozen reference cached within 600-second preflight"
+        elif zero_adapter:
             references = [current.detach() for current in currents]
             mode = "Frozen native base via verified exact-zero LoRA-B identity"
         else:
@@ -268,7 +316,7 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r18",
+        return {"name": "native-s4-affine-cache-r20",
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
@@ -279,6 +327,8 @@ class AlignedS4Runtime:
                                         "and complete decode attention outputs; "
                                         "recompute other projections",
                 "zero_adapter_reference": "Exact-zero LoRA-B native output identity",
+                "reference_cache": "Opt-in frozen native precomputation within the "
+                                   "original 600-second preflight, not a third phase",
                 "storage": "Frozen fp32 affine base and shared head biases; "
                            "bf16 activations; fp32 LoRA",
                 "gradients": "One whole-group backward through shared history; "
@@ -303,6 +353,7 @@ class AlignedS4Runtime:
         if hasattr(self.trainer, "training_group_logprobs"):
             del self.trainer.training_group_logprobs
         self.states.clear()
+        self.reference_cache = None
         for handle in self.handles:
             handle.remove()
         for module, forward in self.forwards:

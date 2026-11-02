@@ -364,3 +364,84 @@ def test_bound_runtime_renews_update_budget_only_after_full_preflight():
         assert runtime.started > previous and not runtime.states
     finally:
         runtime.close()
+
+
+def test_preflight_reference_cache_preserves_native_reference_and_policy_gradients():
+    trainer, quantized, episodes = aligned_fixture()
+    with torch.no_grad():
+        for module in trainer.model.modules():
+            if isinstance(module, LoRALinear):
+                module.lora_b.fill_(0.01)
+    trainer.model.eval()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        with pytest.raises(ValueError, match="complete evaluation preflight"):
+            runtime.prepare_reference()
+        with torch.no_grad():
+            for index in range(len(runtime.history)):
+                runtime.select_turn(index)
+                trainer.response_logprobs(runtime.history[index])
+        report = runtime.prepare_reference()
+        cached = runtime.reference_cache
+        assert report["response_tokens"] == 6
+        assert report["requires_grad"] is False
+        assert report["preflight_elapsed_seconds"] <= 600
+        assert len(report["sha256"]) == 64
+        runtime.start_update()
+        trainer.model.train()
+        stages = []
+        currents, references, mode = trainer.training_group_logprobs(
+            runtime.history, stages.append)
+        assert references is cached
+        assert stages == ["forward"] * 2
+        assert "cached within 600-second preflight" in mode
+        with torch.no_grad(), trainer.model.disable_adapter():
+            expected = trainer.response_group_logprobs(runtime.history)
+        for reference, actual in zip(references, expected, strict=True):
+            assert not reference.requires_grad
+            torch.testing.assert_close(reference, actual, rtol=0, atol=0)
+        sum(current.sum() for current in currents).backward()
+        assert any(bool(parameter.grad.abs().any())
+                   for parameter in trainer.parameters.values())
+        assert all(bool(torch.isfinite(parameter.grad).all())
+                   for parameter in trainer.parameters.values())
+    finally:
+        runtime.close()
+    assert runtime.reference_cache is None
+
+
+def test_expired_preflight_cannot_prepare_reference_or_renew_budget():
+    trainer, quantized, episodes = aligned_fixture()
+    trainer.model.eval()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        with torch.no_grad():
+            for index in range(len(runtime.history)):
+                runtime.select_turn(index)
+                trainer.response_logprobs(runtime.history[index])
+        runtime.started -= 601
+        for action in (runtime.prepare_reference, runtime.start_update):
+            with pytest.raises(TimeoutError, match="600-second"):
+                action()
+        assert runtime.reference_cache is None
+    finally:
+        runtime.close()
+
+
+def test_zero_adapter_preflight_keeps_exact_identity_fast_path():
+    trainer, quantized, episodes = aligned_fixture()
+    trainer.model.eval()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        with torch.no_grad():
+            for index in range(len(runtime.history)):
+                runtime.select_turn(index)
+                trainer.response_logprobs(runtime.history[index])
+        calls = runtime.segment_calls
+        report = runtime.prepare_reference()
+        assert "Exact-zero native identity" in report["mode"]
+        assert runtime.reference_cache is None
+        assert runtime.segment_calls == calls
+        runtime.start_update()
+    finally:
+        runtime.close()
