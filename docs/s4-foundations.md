@@ -1,6 +1,38 @@
-# S4 dsh / nano-swe foundations: October 31, 2026
+# S4 dsh / nano-swe foundations: November 2, 2026
 
-## Status: bounded coding and one-step training/feedback gates pass
+## Status: bounded coding and two-step training/feedback chain pass
+
+Continue14 extends the unchanged qualified v1 to immutable
+**s4-policy-v2-911e2399cc5f9154**. **Qualified chain Updates = 2**. The opt-in
+r20 schedule (`63a071d`) caches the same frozen native reference inside the
+existing **600s** preflight, measured **557.864638332976s**; complete shared
+backward/optimizer takes **480.0220505410107s <= 600s**. No phase is extended,
+no historical policy KV is detached, and no production-reference gradient is
+used. GRPO remains the default; each bounded invocation uses fresh AdamW state.
+
+Original /0, original whole /10 and new informative v1 /75 MAEs are
+**0.009696634512675821 / 0.007422680729897122 / 0.007358574464604883**, all
+**<= 0.01**. The new step has finite/nonzero gradients, independently verified
+serialized adapter delta **285.9685056209564**, immutable v2/exact roundtrip,
+driver peak **26,206,765,056 <= 26,800,603,136 bytes**, swap **-1001.07 MiB**.
+
+Fresh owned production-v2 /10 feedback is COMPLETE **2/2**, **11 turns /
+1595 tokens**, with exact reconciliation. API/engine exit before native-v2
+preflight, which passes **MAE 0.006540321691405483 <= 0.01** in
+**424.30589924997184s**. Expected exit 2 is solely homogeneous [1,1] rewards;
+its read-only updates=0 does not reset the qualified two-step chain.
+**211 tests pass in 14.67s**; historical/current source, immutable file and
+whole-group hashes verify. All failures remain retained. Continue14 is
+**52/100** selected starts; cumulative engineering sampling is **90/183**,
+not benchmark accuracy or policy-improvement evidence.
+
+Scope is two bounded fixed-group sequential updates, not multi-hour GRPO,
+persistent optimizer-state resumption, long-context/co-resident training or
+serving-device peak qualification. S5 is not started. Full evidence and next
+step requirements: [training closeout](s4-training.md) and
+`.codex-s1-s4-last.txt`.
+
+### Historical continue13 one-step closeout
 
 Continue13 qualifies **native-s4-affine-cache-r18** (`acc99aa`, `1f89565`):
 unchanged source-bound original /0 **0.009696634512675821** and complete

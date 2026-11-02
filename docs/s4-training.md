@@ -1,6 +1,103 @@
-# S4 production policy preflight: October 31, 2026
+# S4 production policy preflight: November 2, 2026
 
-## Latest closeout: continue13, bounded training/feedback gates pass
+## Latest closeout: continue14, qualified chain Updates = 2
+
+**Two bounded sequential policy updates now form one qualified immutable
+chain.** S1/S2/S3 and the prior accepted continue13 step remain intact:
+`s4-policy-v0-d43b14bef7d62f10` -> `s4-policy-v1-b60ac01c1b9c71ef` ->
+**`s4-policy-v2-911e2399cc5f9154`**. The new step starts from that exact
+qualified v1, not from another v0 attempt. Each bounded invocation uses a
+fresh AdamW optimizer; persistent optimizer-state resumption is not claimed.
+
+| Source-bound check | Complete group | Response tokens | MAE, unchanged bound <= 0.01 |
+| --- | ---: | ---: | ---: |
+| Original v0 /0 | 9 turns | 636 | **0.009696634512675821** |
+| Original informative v0 /10 | 9 turns | 1338 | **0.007422680729897122** |
+| New informative v1 /75 | 8 turns | 1169 | **0.007358574464604883** |
+| Fresh native-v2 /10 feedback | 11 turns | 1595 | **0.006540321691405483** |
+
+The qualified new update is
+`artifacts/s4/policy-continue14-r20-v1-seed-2-update-75/update-v1.json`:
+
+- Parent v1 /75 rewards **[1,0]**, episode advantages **[1,-1]**, all turns
+  COMPLETE, nontruncated and exactly token/tool/session reconciled.
+- Opt-in **native-s4-affine-cache-r20** (`63a071d`) computes the same frozen,
+  disabled-adapter native reference in the existing independent preflight:
+  **557.864638332976s <= 600s**, including **272.2514989170013s** for the
+  1169-token reference. Its content hash is recorded. No production-reference
+  gradients, new phase or extended deadline are introduced.
+- Complete shared-history backward snapshot **479.7561318749795s**;
+  one optimizer step **480.0220505410107s <= 600s**; immutable export snapshot
+  **480.21739750000415s**, also below 600s. Total invocation, including both
+  independent phases, binding checks and cleanup: **1054.8158671670244s**.
+- Finite/present, nonzero gradients; norm **0.1468832939863205**; serialized
+  adapter delta L1 **285.9685056209564**, independently recomputed from v1/v2
+  safetensors. Changed immutable v2, exact PEFT roundtrip, parent model/manifest
+  and entire original group hashes verify. The v0->v1 serialized delta still
+  exactly equals **147.10803923694766**; no parent files are overwritten.
+- **9247** valid nominal-100ms samples across preflight/update/export:
+  driver peak **26,206,765,056 <= 26,800,603,136 bytes**, allocated peak
+  **21,916,203,008**, RSS high-water **1,232,289,792 bytes**. Own-phase swap
+  **6044.88 -> 5043.81 MiB**, delta **-1001.07 MiB**: memory gate passes.
+  These are sampled driver peaks, not allocator-exact peaks.
+
+### Fresh production-v2 and native-v2 feedback
+
+Only after the qualified update exits, owned production serves exactly
+**s4-policy-v2-911e2399cc5f9154**. The first predeclared fresh HumanEval/10 pair
+is COMPLETE **2/2**, rewards **[1,1]**, **11 turns / 1595 response tokens**,
+one dsh session per episode, **4/5** actual tool calls/results, no tool errors,
+truncation or failed requests, and exact proxy/dsh reconciliation. Evidence is
+`policy-continue14-v2-10-group-1`; every start is retained.
+
+Production uses **2133 cache blocks / 4.69 GiB**, not the requested cache-byte
+flag's nominal size. Serving swap endpoints **5842.06 -> 5746.06 MiB** decrease
+by **96.0 MiB**; these endpoint/RSS snapshots do not qualify a serving-device
+peak. API PID **69055** and engine PID **69066** both exit, with port 8000
+closed, **before** native-v2 loads. Sequential loading is preserved throughout.
+
+The new `--policy-version 2` source-bound preflight covers all **11 turns /
+1595 tokens**, **MAE 0.006540321691405483 <= 0.01**, in
+**424.30589924997184s** (`policy-continue14-v2-preflight-10/preflight-v2.json`).
+Its expected blocked/exit-2 status is solely homogeneous rewards **[1,1]** /
+advantages **[0,0]**. Read-only `updates=0` does not reset the qualified
+two-update chain, and this pair cannot justify a third optimizer step.
+
+### Final scope and reproduction
+
+Current full suite: **211 passed in 14.67s**, one existing inspection-only
+checkpoint warning; targeted Ruff and diff checks pass. Final evidence and
+immutable file/source audit is `policy-continue14-closeout/bindings.json`;
+tests are `policy-continue14-closeout/tests.log`. The audit verifies historical
+continue13 hashes against `230e69e`, current source bindings against `63a071d`,
+all v0/v1/v2 checkpoint/adapter/group files, serialized deltas, served catalog,
+and final owned-process/port closure. All rejected arithmetic and failed native
+or sampling attempts remain local evidence, not accepted updates.
+
+Continue14 starts **100** episodes: **52 pass / 48 nonpassing retained**.
+Its v1 exploration is **50/98**; fresh v2 feedback is **2/2**. Including earlier
+history, v0 stays **36/81**, v1 including continue13 is **52/100**, and v2 is
+**2/2**: combined **90/183 selected engineering starts**, **93 nonpassing**.
+These changing selected tasks/seeds/temperatures are not benchmark accuracy,
+pass@k or a measured policy-improvement estimate. Declarations and the complete
+per-group ledger are bound in the final audit.
+
+`1dac1c3`/`c20f07b` generalize immutable policy versions and parent validation;
+`63a071d` adds the opt-in bounded native-reference cache. For a future step,
+stage the unchanged bound parent manifest and adapter symlink in a **new**
+output directory, use `update --policy-version 2 --aligned-arithmetic
+--precompute-reference`, and require a new informative COMPLETE production-v2
+group. After a qualified immutable child export, collect fresh owned production
+feedback, stop API/engine, then run the matching native `--policy-version`.
+Never rerun into earlier immutable evidence or serve a memory-blocked export.
+
+**Acceptance remains two bounded, fixed-group, sequential updates**, not a
+continuous multi-hour GRPO session, persistent optimizer-state training,
+8192-token training, train/serve co-residency, serving-device peak qualification
+or benchmark lift. Engineering sampling time is not multi-hour GRPO evidence.
+S5 algorithm-switch preparation is deliberately not started in this run.
+
+## Previous closeout: continue13, one bounded training/feedback cycle
 
 **One complete, memory-qualified S4 training/feedback cycle is now measured.**
 S1/S2/S3 and bounded coding acceptance remain unchanged. Qualified runtime
@@ -41,10 +138,11 @@ are recorded in `artifacts/s4/continue13-final-tests.log` and
 `artifacts/s4/continue13-final-bindings.json`. Owned probes/API/engine exit;
 port 8000 has no listener. No merge, force-push or unrelated process changes.
 
-## Continue14: immutable version-chain preparation
+## Continue14 preparation history: before second-update qualification
 
-The qualified chain remains **Updates = 1** while the next bounded update is
-being qualified. `1dac1c3` generalizes the opt-in probe from v0 -> v1 to
+At the preparation milestones below, the qualified chain remained **Updates
+= 1** while the next bounded update was being qualified. `1dac1c3` generalizes
+the opt-in probe from v0 -> v1 to
 nonnegative vN -> vN+1, including `--policy-version 2` feedback preflight.
 It checks the requested version and adapter against the bound parent before
 model loading, rejects existing phase reports/child exports (including dangling
