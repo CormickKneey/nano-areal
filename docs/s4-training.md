@@ -41,6 +41,66 @@ are recorded in `artifacts/s4/continue13-final-tests.log` and
 `artifacts/s4/continue13-final-bindings.json`. Owned probes/API/engine exit;
 port 8000 has no listener. No merge, force-push or unrelated process changes.
 
+## Continue14: immutable version-chain preparation
+
+The qualified chain remains **Updates = 1** while the next bounded update is
+being qualified. `1dac1c3` generalizes the opt-in probe from v0 -> v1 to
+nonnegative vN -> vN+1, including `--policy-version 2` feedback preflight.
+It checks the requested version and adapter against the bound parent before
+model loading, rejects existing phase reports/child exports (including dangling
+symlinks), records the parent manifest hash and keeps the invocation's actual
+optimizer-step count separate from policy version. Each invocation still uses
+a fresh AdamW optimizer; this is not persistent optimizer-state resumption.
+GRPO, the frozen native reference, complete-history gradients, allocator limits
+and independent **600s** phase budgets are unchanged. `c20f07b` updates the
+memory-failure test fixtures to satisfy the stronger parent contract.
+
+The restored r18 source and new probe pass **206 tests in 11.52s**. The initial
+full-suite run's two outdated-fixture failures remain in its log; neither is
+hidden by weakening parent validation. Fresh original /0 source-bound parity
+is exactly **0.009696634512675821**, **174.7810997919878s**,
+`policy-continue14-source-0`. Its homogeneous rewards block an update as
+expected; this read-only probe is not an additional qualified update.
+
+### First candidate and retained LoRA diagnostic
+
+Before starts, the production sampling declarations fix independent pairs,
+temperature, output/activity bounds and first-informative-whole-pair selection.
+The initial completed batches contain **38 v1 episode starts: 24 passes and
+14 nonpassing starts retained**, across /10, /20 and /54. Temperature-1 /20
+pairs are homogeneous successes; /54 includes complete external assertion
+failures, not missing-helper errors. An initial launch omits the required
+bound model name and is rejected before any episode start; its log is retained
+but it adds no invented episode to the denominator.
+
+The first informative COMPLETE pair is `policy-continue14-v1-t13-54-group-2`,
+temperature **1.3**, rewards **[0,1]**, **9 turns / 828 response tokens**,
+exact token/tool/session reconciliation. Owned API/engine stop before native
+loading. r18 rejects the whole pair at **MAE 0.013393388431213328 > 0.01**,
+**212.77444683399517s**, **updates=0**, no child export
+(`policy-continue14-v1-update-54`). Sampled driver peak
+**26,206,765,056 <= 26,800,603,136 bytes**, own-phase swap **+155.0 MiB**;
+this does not qualify memory or training.
+
+An isolated actual-v1 layer-0 q/v LoRA comparison finds a production precision
+difference: installed Punica uses bf16 A, prescaled/cast B and a bf16
+intermediate, while native LoRA uses fp32 projections before the final cast.
+An r19 diagnostic matches all four synthetic single-/32-row production probes
+exactly and passes **208 tests in 13.51s**. Original /0 and whole /10 MAEs remain
+exactly **0.009696634512675821 / 0.007422680729897122**. Nevertheless, the same
+whole v1 /54 pair still fails at **0.012582802255345499 > 0.01**,
+**214.47643704200163s**, **updates=0**. Its swap **-1505.87 MiB** and in-budget
+driver peak do not override numerical failure.
+
+**r19 is not promoted.** Its patch, tests, isolated measurements and failed
+whole-group reports remain under `policy-continue14-lora-arithmetic` and
+`policy-continue14-r19-*`; runtime and native tests are restored byte-for-byte
+to qualified r18. Further v1 exploration is declared separately in
+`policy-continue14-v1-production-next/sampling-plan.json`. No old pair is
+subsetted, no tasks are pooled, and no numerical failure is relabeled a pass.
+No v2, second qualified update, multi-hour training or S5 acceptance is claimed
+by this preparation milestone.
+
 ## Continue13: retain complete decode attention outputs
 
 The opt-in **native-s4-affine-cache-r16** wraps the existing tokenwise
