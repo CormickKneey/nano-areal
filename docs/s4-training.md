@@ -1,10 +1,10 @@
 # S4 production policy preflight: November 3, 2026
 
-## Continue16 rolling measurement: 14:00 Asia/Shanghai
+## Continue16 rolling measurement: 15:40 Asia/Shanghai
 
-**Closed feedback chain Updates = 6**, with an additional memory-qualified v7
-export **s4-policy-v7-6b85ec7004ac4fcc** awaiting fresh native feedback. New
-qualified optimizer work totals **2178.1816964179743s = 0.6050504712272151 hours**.
+**Closed feedback chain Updates = 10**, with an additional memory-qualified v11
+export **s4-policy-v11-408f1a522b6f864c** awaiting fresh native feedback. New
+qualified optimizer work totals **3860.146303376998s = 1.072262862049166 hours**.
 This excludes sampling, preflight/reference, IO and rejected attempts. **Multi-hour
 GRPO is NOT yet measured; S5 is not started.** Fresh AdamW per invocation remains
 explicit. The independent **600s**, **MAE <= 0.01**, **driver <= 26,800,603,136**,
@@ -17,8 +17,12 @@ no-swap-growth, finite/nonzero-gradient and immutable-roundtrip gates are unchan
 | v4 -> v5, a8 r21 | 0.008996416003928153 | 548.7512551670079 | 523.3404543750221 | 24322457600 | -2333.31 |
 | v5 -> v6, a10 r21 | 0.009274460953603153 | 519.2186792499851 | 486.3300367089687 | 24095965184 | -19.88 |
 | v6 -> v7, a13 r21 | 0.00907836544016997 | 430.58975312503753 | 405.33873016701546 | 23693312000 | -614.32 |
+| v7 -> v8, a14 r21 | 0.005074097907683729 | 433.3489967919886 | 385.63818266702583 | 23668146176 | -341.88 |
+| v8 -> v9, a15 r21 | 0.00812750525547931 | 469.40698204096407 | 445.2040761670214 | 23819141120 | -194.75 |
+| v9 -> v10, a18 r21 | 0.008860466421301503 | 482.10525070899166 | 488.84286616701866 | 23919804416 | -1418.63 |
+| v10 -> v11, a19 r21 | 0.007511483045754495 | 398.7247638749541 | 362.2794819579576 | 23450042368 | -161.19 |
 
-Qualified v6 is **s4-policy-v6-45d8b30911151ace**. The last two reports are
+Earlier qualified v6 is **s4-policy-v6-45d8b30911151ace**. Two earlier reports are
 `policy-continue16-v5-a10-update-r21/update-v5.json` and
 `policy-continue16-v6-a13-update-r21/update-v6.json`. Independently serialized
 adapter deltas are **291.3351138830185 / 291.8929268717766**; both have finite,
@@ -26,6 +30,15 @@ present, nonzero gradients and exact immutable roundtrips. Their entire fresh
 parent feedback groups are COMPLETE and reconciled, with API/engine stopped
 before native loading. Earlier a12 fails **MAE 0.011191955569665879** and performs
 no optimizer/export. Every failed or homogeneous group remains retained.
+
+The latest report is `policy-continue16-v10-a19-update-r21/update-v10.json`,
+serialized delta **292.4882797598839**, finite/nonzero gradients and exact
+immutable roundtrip. a16 fails **MAE 0.010311108941765635** without an optimizer;
+a17 completes an optimizer but fails **swap +660.31 MiB**. Neither is accepted.
+The local a15 controller cleanup races with an already exiting child; owned API
+**39674**, engine **39681** and tracker **39680** are verified absent, port 8000
+closed, before native resumes on the unchanged selected pair. All original
+failure/recovery evidence is retained. No training source changes after `fe0a03f`.
 
 **237 tests pass**. Further bounded measurement continues under opt-in r21; no
 rejected export is served or used as a parent. These are selected engineering

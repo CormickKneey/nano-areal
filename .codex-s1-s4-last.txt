@@ -1,10 +1,10 @@
 S1-S4 continue16 measurement in progress - November 3, 2026
 
-LATEST ROLLING STATUS (14:00 Asia/Shanghai): closed feedback chain Updates=6;
-memory-qualified v7 s4-policy-v7-6b85ec7004ac4fcc awaits fresh native feedback.
+LATEST ROLLING STATUS (15:40 Asia/Shanghai): closed feedback chain Updates=10;
+memory-qualified v11 s4-policy-v11-408f1a522b6f864c awaits fresh native feedback.
 Qualified v6: s4-policy-v6-45d8b30911151ace. Both continue from exact qualified
 parents; rejected exports remain unused. New qualified optimizer work is
-2178.1816964179743s = 0.6050504712272151 hours, excluding all sampling,
+3860.146303376998s = 1.072262862049166 hours, excluding all sampling,
 preflight/reference, IO and rejected attempts. Multi-hour GRPO is NOT yet measured.
 v5 -> v6 report: policy-continue16-v5-a10-update-r21/update-v5.json; MAE
 0.009274460953603153, preflight 519.2186792499851s, optimizer 486.3300367089687s,
@@ -17,6 +17,15 @@ fresh parent feedback is reconciled and owned API/engine stop before native load
 The a12 /75 attempt fails MAE 0.011191955569665879; zero optimizer/export.
 All independent 600s, MAE, driver and no-swap-growth gates remain unchanged.
 237 tests pass. S5 is not started. Further measurement is running under r21.
+Latest v10 -> v11 report: policy-continue16-v10-a19-update-r21/update-v10.json;
+MAE 0.007511483045754495, combined preflight 398.7247638749541s, optimizer
+362.2794819579576s, driver 23450042368, swap -161.19 MiB, serialized delta
+292.4882797598839, finite/nonzero gradients, exact immutable roundtrip.
+The a16 pair fails MAE 0.010311108941765635; a17 finishes an optimizer but fails
+swap +660.31 MiB. Both remain rejected; no rejected export becomes a parent.
+Controller-only a15 cleanup race happens after owned child exit; API 39674,
+engine 39681 and tracker 39680 are absent and port closed before explicitly
+resuming native from the unchanged selected pair. Recovery evidence is retained.
 
 Earlier r21 milestone (superseded totals):
 LATEST MILESTONE: closed feedback chain Updates=4; memory-qualified v5 export
