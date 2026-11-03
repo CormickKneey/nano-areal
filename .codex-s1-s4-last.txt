@@ -225,3 +225,14 @@ NOT multi-hour yet. Fresh AdamW per bounded update; S5 unstarted.
 pre-existing Ruff findings as its unchanged baseline; no unrelated reformatting.
 Evidence: artifacts/s4/policy-continue16-text-only-load and
 artifacts/s4/policy-continue16-v11-a25-update-r23/update-v11.json.
+Continue16 rolling progress at 2026-11-03 20:14 Asia/Shanghai
+Closed chain Updates=14; qualified v15 awaits fresh child feedback.
+Parent candidate s4-policy-v15-a615b8db624c10da comes only from
+policy-continue16-v14-a34-update-r23. MAE 0.009476843374480385;
+combined preflight 366.5295590829919s; optimizer 321.44538975000614s;
+driver 22896394240 bytes; swap -300.0 MiB; finite/nonzero grads and exact
+roundtrip. Earlier accepted r23 v12->v13 and v13->v14 add 459.8922491669655s
+and 442.85232691600686s. Fresh v12/v13/v14 feedback passes unchanged gates.
+Qualified optimizer total 5433.657696418988s = 1.5093493601163857h.
+NOT multi-hour yet; no S5. All rejected exports remain excluded/unserved.
+The r23 source milestone 4c863f2 is committed and pushed; PR #4 stays OPEN.

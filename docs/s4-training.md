@@ -2029,3 +2029,14 @@ gates pass; no arithmetic, reference-gradient, graph or deadline relaxation.
 Evidence: `artifacts/s4/policy-continue16-v11-a25-update-r23/update-v11.json`.
 243 tests pass. Changed files pass Ruff except the loader's unchanged set of
 36 pre-existing findings. Earlier rolling progress follows.
+# Continue16 rolling progress (2026-11-03 20:14 Asia/Shanghai)
+
+Closed chain **Updates=14**; memory-qualified v15
+`s4-policy-v15-a615b8db624c10da` awaits fresh child feedback. Qualified optimizer
+total **5433.657696418988s = 1.5093493601163857h**, still **not multi-hour**.
+Accepted r23 v12->v13, v13->v14 and v14->v15 contribute 459.8922491669655s,
+442.85232691600686s and 321.44538975000614s respectively. Fresh native feedback
+closes v12/v13/v14. Latest v14->v15 MAE 0.009476843374480385, combined preflight
+366.5295590829919s, driver 22,896,394,240 bytes, swap -300.0 MiB. All unchanged
+gates pass; rejected exports are never served. S5 remains unstarted.
+Source milestone `4c863f2` is pushed; earlier chronological measurements follow.
