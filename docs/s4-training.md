@@ -1,3 +1,144 @@
+## Continue16 closeout: measured multi-hour bounded GRPO
+
+Finalized **2026-11-04T02:54:11+08:00** (Asia/Shanghai). This section supersedes all rolling
+continue16 totals below; earlier evidence is historical, not additional steps.
+
+- **Qualified closed chain Updates=20**, immutable tip `s4-policy-v20-8b386344d079b75f`.
+- **18 newly qualified updates**, v2 through v20, contribute **7612.880419503024
+  seconds = 2.1146890054175067 hours of actual backward/optimizer work in continue16**.
+  This exceeds two hours without counting the two historical updates.
+- Sampling, policy/reference preflight, loading, export, idle time and rejected
+  or partial updates are **excluded** from qualified optimizer hours. Completed
+  optimizer work including rejected attempts is
+  **13726.74335454317s**; its rejected
+  portion **6113.862935040146s** is not acceptance evidence.
+- Scope is **cumulative bounded fixed-group sequential GRPO**, fresh AdamW per
+  invocation. This is **not** continuous single-process training, persistent
+  optimizer-state resumption, 8192-token training, train/serve co-residency,
+  benchmark improvement or broad/full S4 generalization. **S5 is not started**.
+
+### Unchanged acceptance gates
+
+Every newly accepted update has whole COMPLETE reconciled fixed-task episodes,
+genuine external reward spread, MAE <=0.01, combined policy plus frozen native
+reference preflight <=600s, independent backward/optimizer/export <=600s,
+driver <=26,800,603,136 bytes, no endpoint swap growth against its own baseline,
+finite/nonzero gradients, changed adapter, exact immutable roundtrip and checked
+parent/file/source/group hashes. No episode subsets, token trimming, pooled tasks,
+detached historical KV, production-reference gradients, allocation-limit changes
+or deadline extensions are used. The largest accepted preflight is
+**548.7512551670079s**, optimizer **523.3404543750221s**, and sampled driver peak
+**26,206,765,056 bytes**. All new full-model serving/native loads are sequential;
+owned API and engine shutdown evidence precedes every native load.
+
+Original v0 `/0` and whole `/10` MAEs remain exactly **0.009696634512675821** and
+**0.007422680729897122** under both accepted r21 and r23 source. Locked v1 `/75`
+**0.007358574464604883**, v2 fresh `/10` **0.006540321691405483**, historical
+v1->v2 preflight **557.864638332976s** and optimizer **480.0220505410107s** remain
+accepted and unchanged. S1/S2/S3 remain accepted.
+
+### Source and memory qualification
+
+- `fe0a03f`: opt-in `--chunked-affine-load` (r21) constructs the frozen affine
+  head in 1024-row chunks; default whole-head loading remains unchanged.
+  Same whole v4 a8 group reproduces MAE, reference hash and serialized adapter
+  bytes exactly, with driver 24,322,457,600 bytes and swap -2333.31 MiB.
+- `4c863f2`: opt-in `--text-only-load` (r23) validates all checkpoint keys/shapes
+  while leaving **830,695,424 bytes** of unused frozen visual weights on meta.
+  Image inputs explicitly reject; default multimodal loading is unchanged.
+  Runtime hashes bind the loader source. Same whole v11 a25 group reproduces
+  MAE, reference hash and the entire adapter file exactly; preflight
+  385.0147690830054s, optimizer 349.32142720901174s, driver 23,005,446,144 bytes,
+  swap -856.0 MiB. Arithmetic, reference and shared-history autograd are unchanged.
+- Unpromoted r22 36-segment cache reclaim still fails swap +213.38 MiB with no
+  driver reduction; its patch, source snapshots and reports stay local. It is
+  reverted before r23 and never used as accepted source or parent.
+
+### Qualified immutable chain
+
+The locked parents are v0 `s4-policy-v0-d43b14bef7d62f10`,
+v1 `s4-policy-v1-b60ac01c1b9c71ef`, v2 `s4-policy-v2-911e2399cc5f9154`.
+All directories below are under ignored `artifacts/s4/`; each contains the native
+report, staged parent, immutable child and independent qualification report.
+Displayed table values are rounded; the aggregate uses unrounded report seconds.
+
+| Child | Immutable model | MAE | Policy + reference (s) | Optimizer (s) | Driver peak (bytes) | Swap delta (MiB) | Evidence directory |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| v3 | `s4-policy-v3-0283402fad5e03e0` | 0.009480322237 | 390.356649 | 366.081550 | 26206765056 | -1906.88 | `policy-continue16-v2-a3-update` |
+| v4 | `s4-policy-v4-3fd85d9e1f210f8c` | 0.008632034094 | 419.642922 | 397.090925 | 26206765056 | -303.75 | `policy-continue16-v3-a5-update` |
+| v5 | `s4-policy-v5-46ff80282bf372fb` | 0.008996416004 | 548.751255 | 523.340454 | 24322457600 | -2333.31 | `policy-continue16-v4-a8-update-r21` |
+| v6 | `s4-policy-v6-45d8b30911151ace` | 0.009274460954 | 519.218679 | 486.330037 | 24095965184 | -19.88 | `policy-continue16-v5-a10-update-r21` |
+| v7 | `s4-policy-v7-6b85ec7004ac4fcc` | 0.009078365440 | 430.589753 | 405.338730 | 23693312000 | -614.32 | `policy-continue16-v6-a13-update-r21` |
+| v8 | `s4-policy-v8-bb496868fbf72bca` | 0.005074097908 | 433.348997 | 385.638183 | 23668146176 | -341.88 | `policy-continue16-v7-a14-update-r21` |
+| v9 | `s4-policy-v9-471752684fb50a35` | 0.008127505255 | 469.406982 | 445.204076 | 23819141120 | -194.75 | `policy-continue16-v8-a15-update-r21` |
+| v10 | `s4-policy-v10-f0a6913ab4385224` | 0.008860466421 | 482.105251 | 488.842866 | 23919804416 | -1418.63 | `policy-continue16-v9-a18-update-r21` |
+| v11 | `s4-policy-v11-408f1a522b6f864c` | 0.007511483046 | 398.724764 | 362.279482 | 23450042368 | -161.19 | `policy-continue16-v10-a19-update-r21` |
+| v12 | `s4-policy-v12-ddcb9b0045f3e4f6` | 0.009366231648 | 385.014769 | 349.321427 | 23005446144 | -856.00 | `policy-continue16-v11-a25-update-r23` |
+| v13 | `s4-policy-v13-39ddc512df31c0ca` | 0.007879758657 | 487.734977 | 459.892249 | 23525539840 | -344.81 | `policy-continue16-v12-a32-update-r23` |
+| v14 | `s4-policy-v14-e1338044fe55b17d` | 0.008405575651 | 460.240897 | 442.852327 | 23374544896 | -1426.19 | `policy-continue16-v13-a33-update-r23` |
+| v15 | `s4-policy-v15-a615b8db624c10da` | 0.009476843374 | 366.529559 | 321.445390 | 22896394240 | -300.00 | `policy-continue16-v14-a34-update-r23` |
+| v16 | `s4-policy-v16-d16aa19052081b1b` | 0.006744063404 | 436.424019 | 433.650005 | 23164829696 | -6.32 | `policy-continue16-v15-a37-update-r23` |
+| v17 | `s4-policy-v17-1107e4046648ab5b` | 0.008466361209 | 481.785974 | 463.625032 | 23458430976 | -350.12 | `policy-continue16-v16-a41-update-r23` |
+| v18 | `s4-policy-v18-b3b98a502af1c707` | 0.008339061772 | 454.927108 | 464.300127 | 22896394240 | -1151.06 | `policy-continue16-v17-a44-update-r23` |
+| v19 | `s4-policy-v19-396c36bc9da49b59` | 0.009919480888 | 416.471990 | 399.123265 | 23148052480 | -426.31 | `policy-continue16-v18-a47-update-r23` |
+| v20 | `s4-policy-v20-8b386344d079b75f` | 0.009690006445 | 473.612411 | 418.524294 | 23290658816 | -295.06 | `policy-continue16-v19-a53-update-r23` |
+
+### Final child feedback and audit
+
+Fresh owned production-v20 `/75` feedback is COMPLETE **2/2**, exactly reconciled,
+**909 response tokens**, homogeneous rewards [1,1]. Owned API/engine exit before
+native-v20 read-only parity: **MAE 0.009032955715930697 <=0.01**, **230.8480740840314s**.
+Expected exit 2 is only zero advantages; read-only Updates=0 does not reset the
+20-step qualified chain. Endpoint swap is **-136.0 MiB** and driver snapshot
+**20,881,031,168 bytes**; these are read-only snapshots, not sampled optimizer peaks.
+Full v20 update memory is independently qualified in its preceding update report.
+Feedback wrapper initially expected an unversioned report filename; the actual
+versioned native report is retained unchanged and independently verified.
+
+Final audit verifies all 18 new steps, immutable parent chain, base/adapter/group
+file hashes, historical source revisions, finite/nonzero serialized deltas,
+original-group parity and fresh feedback for every child. Evidence:
+
+- `artifacts/s4/policy-continue16-closeout/bindings.json`
+- SHA256: `b712a88d4569279731f3c9024ec6c3dfb0a3603cc776ff8e9c48868da70724fd`
+- `artifacts/s4/policy-continue16-closeout/audit-final.log`
+- `artifacts/s4/policy-continue16-closeout/final-feedback.json`
+- Final update: `artifacts/s4/policy-continue16-v19-a53-update-r23/update-v19.json`
+- Final feedback: `artifacts/s4/policy-continue16-v20-a90-feedback/preflight-v20.json`
+
+Continue16 engineering sampling totals are **388 attempted / 149 reported passed**,
+including failures and final feedback, across selected fixed tasks and policies.
+They are **not an unbiased benchmark or a claimed training gain**; do not pool
+them with historical starts. Every failed, homogeneous and incomplete start stays
+local. Deadline/MAE/memory-blocked exports are never served or promoted. Sampling
+batch changes are explicitly predeclared; after expanded a35 exhausts, focused
+a37..64 uses /75 and up to 12 whole pairs, first COMPLETE informative pair,
+without token-length selection. After a36 native exit, a CPU-only operator port
+guard checkpoints the controller, then releases before any subsequent serving.
+
+**243 tests pass in 13.17s**. Seven changed files pass Ruff; `state_dict.py`
+retains exactly its 36 pre-existing lint findings, without unrelated reformatting.
+The initial final-test invocation omitted the repo import path and fails collection;
+the corrected `PYTHONPATH` invocation passes. All failed logs remain retained.
+All owned serving/native/controller jobs have exited; port 8000 is closed.
+No weights, hidden tests, task solutions or raw sessions are committed.
+
+### Next continuation
+
+The primary multi-hour bounded measurement is complete. Optional S5 loss-switch
+unit tests may start separately; metal default must remain GRPO. If extending S4,
+stage qualified v20 plus its adapter symlink in a fresh output directory, collect
+a new complete externally informative production-v20 group (current [1,1] cannot
+train), stop owned serving, then use policy-version 20 with aligned arithmetic,
+chunked affine load, text-only load and frozen native reference precomputation.
+Keep every gate unchanged; serve only independently qualified children.
+Do not resume continue15 or overwrite any earlier evidence. PR #4 remains OPEN;
+normal pushes only, no merge or force-push.
+
+---
+
+## Earlier chronological evidence (superseded totals)
+
 # S4 production policy preflight: November 3, 2026
 
 ## Continue16 rolling measurement: 17:40 Asia/Shanghai

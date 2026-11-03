@@ -1,3 +1,27 @@
+## Continue16 status: 2026-11-04T02:54:11+08:00
+
+**Qualified closed S4 chain Updates=20**, immutable tip `s4-policy-v20-8b386344d079b75f`.
+Continue16 adds **18 qualified sequential fixed-group GRPO updates**, measuring
+**7612.880419503024s = 2.1146890054175067h of actual optimizer work**. Sampling, preflight,
+loading/export, idle and rejected/partial work are excluded. Fresh AdamW per
+bounded invocation; this is cumulative multi-hour bounded GRPO, not continuous
+single-process or persistent-optimizer training, 8192-token/co-resident training,
+benchmark improvement or broad/full S4 generalization. S1/S2/S3 stay accepted;
+**S5 is not started** and metal default stays GRPO.
+
+Every update passes unchanged MAE<=0.01, policy+native-reference preflight<=600s,
+independent backward/optimizer/export<=600s, driver<=26,800,603,136 bytes,
+no own-baseline swap growth, finite/nonzero gradients and exact immutable roundtrip.
+Opt-in r21 chunked affine load and r23 text-only materialization preserve arithmetic;
+default multimodal loading is unchanged. Original /0 and whole /10 MAEs reproduce
+exactly. Fresh v20 COMPLETE reconciled /75 feedback: 2/2, native MAE
+**0.009032955715930697**, **230.8480740840314s**; [1,1] rewards cannot train.
+**243 tests pass**. Complete 20-step chain and file/source/parent hashes verify;
+all owned serving/native jobs are stopped. No failed export is served or counted.
+Evidence and scope: `docs/s4-training.md`, `.codex-s1-s4-last.txt`, and local
+`artifacts/s4/policy-continue16-closeout/bindings.json` (SHA256 `b712a88d4569279731f3c9024ec6c3dfb0a3603cc776ff8e9c48868da70724fd`).
+Earlier status sections are historical and do not supersede this closeout.
+
 # S4 dsh / nano-swe foundations: November 2, 2026
 
 ## Status: bounded coding and two-step training/feedback chain pass

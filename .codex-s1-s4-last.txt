@@ -1,253 +1,80 @@
-S1-S4 continue16 measurement in progress - November 3, 2026
+Continue16 authoritative closeout: 2026-11-04T02:54:11+08:00 (Asia/Shanghai)
+Repo: /Users/bear/workspace/github/nano-areal
+Branch: cursor/macos-qwen3vl-v02-plan-f4cf; PR #4 OPEN; no merge/force-push.
+S1 accepted; S2 accepted; S3 accepted. S5 NOT started.
 
-LATEST ROLLING STATUS (17:40 Asia/Shanghai): closed feedback chain Updates=11,
-tip s4-policy-v11-408f1a522b6f864c. No qualified v12 exists.
-Qualified v6: s4-policy-v6-45d8b30911151ace. Both continue from exact qualified
-parents; rejected exports remain unused. New qualified optimizer work is
-3860.146303376998s = 1.072262862049166 hours, excluding all sampling,
-preflight/reference, IO and rejected attempts. Multi-hour GRPO is NOT yet measured.
-v5 -> v6 report: policy-continue16-v5-a10-update-r21/update-v5.json; MAE
-0.009274460953603153, preflight 519.2186792499851s, optimizer 486.3300367089687s,
-driver 24095965184, swap -19.88 MiB, serialized delta 291.3351138830185.
-v6 -> v7 report: policy-continue16-v6-a13-update-r21/update-v6.json; MAE
-0.00907836544016997, preflight 430.58975312503753s, optimizer 405.33873016701546s,
-driver 23693312000, swap -614.32 MiB, serialized delta 291.8929268717766.
-Both have finite/nonzero gradients and exact immutable roundtrips; complete
-fresh parent feedback is reconciled and owned API/engine stop before native load.
-The a12 /75 attempt fails MAE 0.011191955569665879; zero optimizer/export.
-All independent 600s, MAE, driver and no-swap-growth gates remain unchanged.
-237 tests pass. S5 is not started. Further measurement is running under r21.
-Latest v10 -> v11 report: policy-continue16-v10-a19-update-r21/update-v10.json;
-MAE 0.007511483045754495, combined preflight 398.7247638749541s, optimizer
-362.2794819579576s, driver 23450042368, swap -161.19 MiB, serialized delta
-292.4882797598839, finite/nonzero gradients, exact immutable roundtrip.
-The a16 pair fails MAE 0.010311108941765635; a17 finishes an optimizer but fails
-swap +660.31 MiB. Both remain rejected; no rejected export becomes a parent.
-Controller-only a15 cleanup race happens after owned child exit; API 39674,
-engine 39681 and tracker 39680 are absent and port closed before explicitly
-resuming native from the unchanged selected pair. Recovery evidence is retained.
-Fresh v11 a21 /75 feedback is COMPLETE/reconciled (881 tokens), native MAE
-0.00888789211326912 and combined preflight 406.82065941701876s pass. Its subsequent
-v12 export fails swap +75.18 MiB and never becomes a parent. a25 also fails swap
-+317.56 MiB; a22 /54 MAE 0.011329497088753413, a24 /75 MAE 0.01226110114479078,
-a26 /75 MAE 0.010856491889993275, and a20/a23 deadline failures remain rejected.
-An unpromoted r22 36-segment cache-reclaim experiment reproduces original /0 and
-/10 MAEs exactly and passes 248 candidate tests, but its same whole a25 update
-still fails swap +213.38 MiB. Driver peak 23441653760 is unchanged, optimizer
-354.1788309160038s, same frozen-reference hash and byte-identical adapter. It is
-NOT accepted. Patch, source snapshots, tests and failure logs remain under
-policy-continue16-cache-reclaim. All four modified source/test files are restored
-byte-for-byte to fe0a03f; accepted source/test baseline remains r21 / 237 tests.
-The controller exits after unchanged a26; no source edits occur during a native
-phase. Expanded predeclared fixed-task sampling resumes from qualified v11 for
-attempts 27..48, with unchanged r21 and ALL original gates. No tasks are pooled,
-episodes subsetted, tokens trimmed, rewards fabricated or failed exports served.
+QUALIFIED CLOSED CHAIN UPDATES=20
+Current immutable policy: s4-policy-v20-8b386344d079b75f
+Manifest: artifacts/s4/policy-continue16-v19-a53-update-r23/policy-v20.json
+Adapter: artifacts/s4/policy-continue16-v19-a53-update-r23/adapter-v20
+Locked v0/v1/v2 remain unchanged:
+s4-policy-v0-d43b14bef7d62f10
+s4-policy-v1-b60ac01c1b9c71ef
+s4-policy-v2-911e2399cc5f9154
 
-Earlier r21 milestone (superseded totals):
-LATEST MILESTONE: closed feedback chain Updates=4; memory-qualified v5 export
-s4-policy-v5-46ff80282bf372fb awaits fresh child feedback. Never serve the rejected
-s4-policy-v5-4c563cb8410fb7b8 from the earlier r20 a8 attempt.
-Opt-in --chunked-affine-load (r21) loads the SAME frozen fp32 head in 1024-row
-chunks and reclaims unused allocator cache before head construction. Whole-head
-r20 loading stays the default. No KV detachment, arithmetic/loss change, allocator
-limit change or extended phase budget. The complete new adapter file is BYTE
-IDENTICAL to the earlier rejected a8 export; only the new independent invocation
-qualifies under its own measured memory baseline.
-Source-bound original /0 and whole /10 MAEs reproduce EXACTLY:
-0.009696634512675821 / 0.007422680729897122, in 170.15340020804433 / 341.9018179170089s.
-Evidence: policy-continue16-r21-source-{0,10}/preflight.json.
-Whole v4 a8 group (1189 tokens): MAE 0.008996416003928153 unchanged; frozen reference
-hash 026e850e49f2ff529fdd4c8bd97f40f66f672435f13e83a18e4162a460191f28 unchanged;
-combined preflight 548.7512551670079s; optimizer 523.3404543750221s; export
-523.5702779580024s. Driver peak 24322457600 <= 26800603136, swap -2333.31 MiB,
-finite/nonzero grad norm 0.2139706313610077, exact roundtrip, serialized delta
-291.5389885902405. Report: policy-continue16-v4-a8-update-r21/update-v4.json.
-237 tests pass in 11.82s; the added option requires aligned arithmetic before load.
-NEW QUALIFIED OPTIMIZER WORK: 1286.5129295419902s = 0.3573647026505528h.
-NOT multi-hour GRPO; S5 remains unstarted. Fresh AdamW per bounded invocation.
-The previous bounded controller exits after unchanged a9 preflight hits 600s,
-before source edits. An explicit r21 controller will continue from qualified v5;
-no historical evidence or rejected export is overwritten or used as a parent.
+MEASURED MULTI-HOUR BOUNDED GRPO:
+18 newly qualified v2->v20 updates in continue16.
+Actual qualified optimizer work: 7612.880419503024s = 2.1146890054175067h.
+Excludes sampling, policy/reference preflight, loading/export, idle, rejected and
+partial work. Completed optimizer including rejected: 13726.74335454317s;
+rejected completed portion: 6113.862935040146s (NOT acceptance).
+Fresh AdamW per bounded invocation; NOT persistent optimizer-state resumption or
+continuous single-process training. No 8192-token/co-residency/benchmark-gain claim.
 
-Earlier continue16 chronological progress follows (superseded totals):
-Further progress: a memory-qualified v3 -> v4 export exists, fresh child feedback
-qualification still pending. Child s4-policy-v4-3fd85d9e1f210f8c comes ONLY from
-policy-continue16-v3-a5-update: MAE 0.008632034094075952, 909 tokens,
-preflight 419.6429217499681s, optimizer 397.0909252499696s, export 397.25951445900137s,
-driver 26206765056, swap -303.75 MiB, grad norm 0.1813056319952011,
-exact roundtrip and independently serialized delta 290.82368713617325.
-New qualified optimizer work now totals 763.1724751669681s = 0.21199235421304669h.
-The earlier a4 v3 -> v4 export s4-policy-v4-fab898fd3137348d FAILS swap +799.57 MiB;
-its 342.8980350419879 optimizer seconds are rejected work, not qualified-chain time.
-That rejected export is NEVER served or used as a parent. All subsequent v4 starts
-bind only to the a5 child. The a6 2158-token pair passes numerical MAE
-0.008920769036255232 but fails combined reference preflight at the 600s deadline;
-no v5 optimizer/export. a7 exhausts its declared sampling without an informative
-complete pair; all starts remain retained. a8 is measuring another whole pair.
+Every qualified update passes unchanged MAE<=0.01, combined policy+native-reference
+preflight<=600s, independent backward/optimizer/export<=600s, driver<=26800603136,
+no swap endpoint growth vs own baseline, finite/nonzero gradients, changed adapter,
+immutable exact roundtrip and source/parent/group/file hashes. Whole COMPLETE
+reconciled fixed-task pairs with genuine external rewards only. No KV detaching,
+reference gradients, threshold/allocation loosening, subsets, trimming or pooling.
+All real serving/native loads sequential; owned API+engine stop before native.
 
-QUALIFIED CLOSED CHAIN UPDATES = 3. Historical Updates=2 evidence is preserved.
-The third optimizer step and fresh child-v3 native feedback pass unchanged gates.
-Fresh v3 COMPLETE reconciled /75 feedback: policy-continue16-v3-a4-75-group-3,
-rewards [0,1], 8 turns / 833 tokens, native MAE 0.0068365937911671676 <= 0.01.
-Owned API 3390 and engine exit; port 8000 closes before matching native-v3 load.
-Its combined policy/reference preflight passes in 388.4028702499927s <= 600s;
-the same whole group is now being measured for a bounded v3 -> v4 update.
-New immutable child: s4-policy-v3-0283402fad5e03e0, parent exact qualified v2.
-Report: artifacts/s4/policy-continue16-v2-a3-update/update-v2.json
-Whole COMPLETE reconciled HumanEval/75 pair: policy-continue16-v2-a3-75-group-1.
-Rewards [0,1], advantages [-1,1], 8 turns / 836 response tokens.
-MAE 0.009480322236596254 <= 0.01; combined policy/reference preflight
-390.3566487909993s <= 600s; optimizer 366.0815499169985s <= 600s.
-Export snapshot 366.2753770829877s; finite/nonzero grad norm 0.2567727863788605.
-Driver peak 26206765056 <= 26800603136 bytes; 6724 valid nominal-100ms samples.
-Own swap 9920.94 -> 8014.06 MiB, delta -1906.88 MiB; exact immutable roundtrip;
-independently recomputed serialized adapter delta L1 290.5152745246887.
+Original /0 MAE 0.009696634512675821; whole /10 0.007422680729897122 reproduce exactly
+under r21 and r23. Locked v1 /75 0.007358574464604883 and fresh v2 /10
+0.006540321691405483 remain accepted. Locked v1->v2 preflight557.864638332976s,
+optimizer480.0220505410107s, driver26206765056, swap-1001.07MiB unchanged.
+New accepted maximum preflight548.7512551670079s, optimizer523.3404543750221s,
+driver26206765056. No gate relaxed.
 
-Third-step-only optimizer work: 366.0815499169985s = 0.10168931942138847 hours.
-Only optimizer elapsed_seconds counts here; sampling, preflight, frozen-reference
-computation, IO, failed attempts and idle time do not count toward this target.
-This is NOT multi-hour GRPO. Fresh AdamW per invocation; S5 is not started.
-Controller plans/events: artifacts/s4/policy-continue16-control/.
-First /10 attempt: MAE 0.007714907642789618 passes, but frozen-reference replay
-hits unchanged 600s preflight limit; zero updates, no child.
-Second /75 attempt: MAE 0.01112106341688855 fails; zero updates, no child.
-All sampling/native failures retained. First controller import-path failure occurs
-after sampling and owned-server shutdown, before any native attempt; explicit
-resume reuses the unchanged selected pair, not a dead continue15 session.
-204 regression tests plus 7 MLX-probe tests pass (211 total).
+Latest v19->v20: MAE 0.009690006444770916; combined preflight 473.6124106249772s;
+optimizer 418.5242938749725s; driver 23290658816;
+swap -295.0599999999995MiB; independently serialized delta
+292.275783598423; exact immutable roundtrip.
+Final production-v20 /75 COMPLETE2/2, reconciled, 909 tokens, rewards[1,1].
+Native-v20 feedback MAE 0.009032955715930697, 230.8480740840314s; expected exit2
+only zero advantages; read-only Updates=0 does not reset qualified chain20.
+Read-only driver snapshot20881031168, swap-136MiB (not optimizer sampled peaks).
 
-Historical authoritative continue14 closeout follows unchanged:
-S1-S4 continue14 closeout - November 2, 2026
+Accepted source: fe0a03f opt-in chunked affine-head load (r21), then 4c863f2
+opt-in text-only checkpoint materialization (r23). Default multimodal path unchanged;
+all checkpoint keys/shapes still validated, omitted vision830695424 bytes stays meta,
+image inputs reject, loader source hash bound. Same whole v11 a25 group reference
+hash and serialized adapter bytes exactly match rejected r21. Rejected r22 cache
+experiment fails swap+213.38MiB, reverted, never promoted. All failures retained.
+Expanded sampling a35 exhausted; a37..64 focused plan: /75, up to12 whole pairs,
+first COMPLETE informative pair without token-length selection. Every start retained.
+Engineering starts388 / reported passed149 are NOT unbiased benchmark evidence.
 
-QUALIFIED CHAIN UPDATES = 2. S1/S2/S3 and the accepted continue13 step remain intact.
-Branch: cursor/macos-qwen3vl-v02-plan-f4cf. PR #4 stays OPEN; no merge or force-push.
-Repository: /Users/bear/workspace/github/nano-areal (same files as the /Volumes alias).
-Source implementation commits: 1dac1c3, c20f07b, 63a071d. Historical qualified tip: 230e69e.
-The final documentation closeout commit is the current branch HEAD after this handoff is pushed.
+AUDIT: artifacts/s4/policy-continue16-closeout/bindings.json
+SHA256: b712a88d4569279731f3c9024ec6c3dfb0a3603cc776ff8e9c48868da70724fd
+All 18 new steps, immutable parents, historical sources, base/adapter/group hashes,
+serialized deltas, original parity and fresh native feedback for every child verify.
+Full chain/model/report table: docs/s4-training.md (authoritative closeout section).
+Final native report: artifacts/s4/policy-continue16-v19-a53-update-r23/update-v19.json
+Final feedback: artifacts/s4/policy-continue16-v20-a90-feedback/preflight-v20.json
+Final audit: artifacts/s4/policy-continue16-closeout/audit-final.log
+Final tests: 243 passed, 1 warning,13.17s. Corrected PYTHONPATH run passes; initial
+missing-import-path collection failure retained. Seven changed files Ruff-clean;
+state_dict.py retains exactly36 pre-existing lint findings. No unrelated fixes.
+Feedback wrapper filename mismatch recovered using unchanged versioned report;
+all native/model jobs exited before tests/audit. All owned controllers/servers/native
+processes stopped; port8000 closed. Quant RSI/OrbStack/unrelated processes untouched.
+No weights/hidden tests/task solutions/raw sessions committed. continue15 remains dead.
 
-Qualified immutable chain:
-- v0: s4-policy-v0-d43b14bef7d62f10
-- v1: s4-policy-v1-b60ac01c1b9c71ef
-- v2: s4-policy-v2-911e2399cc5f9154
-Each bounded invocation starts fresh AdamW state. This is policy chaining, not persistent optimizer-state resumption.
-
-Current source-bound numerical gates, all <= 0.01:
-- Original v0 /0: 0.009696634512675821, 9 turns / 636 tokens, 174.811879875022s.
-  artifacts/s4/policy-continue14-r20-source-0/preflight.json
-- Original informative v0 /10: 0.007422680729897122, 9 turns / 1338 tokens, 345.17115229100455s.
-  artifacts/s4/policy-continue14-r20-source-10/preflight.json
-- New informative v1 /75: 0.007358574464604883, 8 turns / 1169 tokens, rewards [1,0], advantages [1,-1].
-- Fresh native-v2 /10: 0.006540321691405483, 11 turns / 1595 tokens, 424.30589924997184s.
-  artifacts/s4/policy-continue14-v2-preflight-10/preflight-v2.json
-
-Qualified v1 -> v2 update:
-- Report: artifacts/s4/policy-continue14-r20-v1-seed-2-update-75/update-v1.json
-- Whole COMPLETE reconciled group: artifacts/s4/policy-continue14-r20-v1-seed-2-75-group-1
-- Runtime: native-s4-affine-cache-r20, opt-in --precompute-reference.
-- Same disabled-adapter frozen native reference is cached within the ORIGINAL independent 600s preflight.
-  Preflight: 557.864638332976s, including 272.2514989170013s native-reference computation.
-  Reference hash: fd6b316b960ab4e043ac8325a03f940036a8117fae1af6b74182dc6d75e491f2.
-- One complete shared-history backward: 479.7561318749795s; one optimizer step: 480.0220505410107s < 600s.
-  Immutable export snapshot: 480.21739750000415s. Total invocation including both phases/IO/cleanup: 1054.8158671670244s.
-- Finite/present/nonzero gradients, norm 0.1468832939863205.
-- Adapter delta L1: 285.9685056209564, independently recomputed from serialized v1/v2 tensors.
-- Changed immutable adapter-v2, exact PEFT roundtrip, parent model/manifest and complete-group hashes verify.
-- 9247 valid nominal-100ms samples: driver peak 26206765056 <= 26800603136 bytes;
-  allocated peak 21916203008, RSS high-water 1232289792 bytes.
-- Own-phase swap 6044.88 -> 5043.81 MiB, delta -1001.07 MiB. Complete memory gate passes.
-- Policy manifest: artifacts/s4/policy-continue14-r20-v1-seed-2-update-75/policy-v2.json
-- Historical v0 -> v1 remains unchanged: optimizer 541.8996607080044s, driver 25527287808,
-  swap -416 MiB, serialized delta 147.10803923694766, fresh production-v1 2/2, native-v1 MAE 0.008663687576587205.
-
-Production/native-v2 feedback:
-- artifacts/s4/policy-continue14-v2-production/sampling-plan.json declares the bounded feedback before starts.
-- artifacts/s4/policy-continue14-v2-10-group-1: COMPLETE 2/2, [1,1], 11 turns / 1595 tokens,
-  one dsh session per episode, 4/5 actual tool calls/results, no tool errors or truncation, exact reconciliation.
-- Actual serving cache: 2133 blocks / 4.69 GiB. Swap endpoints 5842.06 -> 5746.06 MiB (-96.0).
-  These are serving endpoint/RSS measurements, not sampled serving-device peak qualification.
-- Owned API 69055 and engine 69066 exit; port 8000 closes BEFORE native --policy-version 2 loads.
-- Native-v2 parity passes. Expected blocked/exit 2 is solely [1,1] homogeneous rewards / [0,0] advantages.
-  Its read-only updates=0 does NOT reset qualified chain Updates=2 and does not permit a third update.
-
-Validation and retention:
-- 211 tests pass in 14.67s; one existing inspection-only checkpoint warning. Targeted Ruff and diff checks pass.
-- Tests: artifacts/s4/policy-continue14-closeout/tests.log
-- Audit: artifacts/s4/policy-continue14-closeout/bindings.json and audit.log
-- Audit verifies current source at 63a071d, historical continue13 source at 230e69e, all historical/current evidence
-  and immutable v0/v1/v2 base/adapter/group hashes, serialized deltas, catalog and final owned-process closure.
-- Continue14: 52/100 selected episode starts; all 48 nonpassing starts retained.
-  Current v1 exploration: 50/98. Fresh v2: 2/2.
-  Cumulative: v0 36/81, v1 including continue13 52/100, v2 2/2; combined 90/183, 93 nonpassing retained.
-  These are engineering sampling counts, not benchmark accuracy, pass@k or measured improvement.
-- All predeclared plans, raw sessions, failed pairs and failed native attempts remain ignored under artifacts/s4.
-  No weights, task solutions, hidden tests or raw sessions are committed.
-- r19 LoRA-rounding diagnostic is NOT promoted: isolated probes match, but whole v1 /54 and /75 still fail MAE.
-  Archived patch/evidence: artifacts/s4/policy-continue14-lora-arithmetic and policy-continue14-r19-*.
-- r18 seed-1 numerical pass still fails update runtime at 600.002093s and driver peak 29949116416 bytes.
-  artifacts/s4/policy-continue14-v1-seed-1-update-75
-- r20 same long seed-1 group passes memory but reaches preflight deadline at 600.042034s; no optimizer/export.
-  artifacts/s4/policy-continue14-r20-v1-update-75
-- Interrupted original seed-2 serving startup has ZERO episode starts; actual engine 60599 exits.
-  Resumed r20 seed-2 first whole pair qualifies; seeds 3/4 and all other unstarted planned groups stay unstarted.
-
-Next continuation:
-- Preserve the qualified v0 -> v1 -> v2 chain and immutable evidence.
-- Stage policy-v2.json and an adapter-v2 symlink in a FRESH output directory; never overwrite earlier evidence.
-- Obtain a new COMPLETE, reconciled, fixed-task production-v2 group with genuine external reward spread.
-  Current [1,1] feedback cannot train. Never subset episodes, trim tokens or pool tasks.
-- Use update --policy-version 2 --aligned-arithmetic --precompute-reference for a bounded v2 -> v3 attempt.
-  The combined policy/native-reference preflight MUST finish within its original 600s; update/backward/optimizer
-  MUST finish within its independent 600s; retain the exact driver/no-swap/gradient/export gates.
-- Only serve a qualified child, then collect fresh COMPLETE feedback, stop owned API AND engine, and run the
-  matching native --policy-version preflight. Sequential loads only, never co-resident train+serve.
-- Do not quit OrbStack, remount, use sudo/passwords or touch Quant RSI/unrelated processes. Keep caches in this repo.
-
-Acceptance is TWO BOUNDED FIXED-GROUP SEQUENTIAL UPDATES ONLY.
-No continuous multi-hour GRPO, persistent optimizer-state training, 8192-token training, train/serve co-residency,
-serving-device peak qualification or benchmark lift is claimed. Sampling wall-clock hours are NOT multi-hour GRPO.
-S5 preparation is not started. All owned training/probe/API/engine processes exit; port 8000 is not listening.
-Continue16 progress at 2026-11-03 18:44 Asia/Shanghai (supersedes totals below)
-Qualified closed chain remains Updates=11; memory-qualified v12 export awaits
-fresh production/native feedback: s4-policy-v12-ddcb9b0045f3e4f6.
-Opt-in r23 text-only loading validates every checkpoint key and shape but leaves
-830695424 bytes of unused frozen visual weights on meta; image inputs rejected.
-Default multimodal loading unchanged. Loader source is included in runtime hashes.
-Original /0 and whole /10 MAEs are bit-exact: 0.009696634512675821 and
-0.007422680729897122; preflights 170.4920348749729s and 340.62432683299994s.
-Same entire a25 /75 group: MAE 0.00936623164768221; policy+reference preflight
-385.0147690830054s; optimizer 349.32142720901174s; driver 23005446144 bytes;
-swap -856.0 MiB; finite/nonzero gradient and exact immutable roundtrip.
-Frozen reference hash and exported adapter bytes exactly match rejected r21 a25;
-no math, KV graph, reference-gradient or gate changes. Only r23 v12 may be served.
-Qualified optimizer work now 4209.46773058601s = 1.1692965918294472h.
-NOT multi-hour yet. Fresh AdamW per bounded update; S5 unstarted.
-243 tests pass; seven changed files pass Ruff. The loader retains the same 36
-pre-existing Ruff findings as its unchanged baseline; no unrelated reformatting.
-Evidence: artifacts/s4/policy-continue16-text-only-load and
-artifacts/s4/policy-continue16-v11-a25-update-r23/update-v11.json.
-Continue16 rolling progress at 2026-11-03 20:14 Asia/Shanghai
-Closed chain Updates=14; qualified v15 awaits fresh child feedback.
-Parent candidate s4-policy-v15-a615b8db624c10da comes only from
-policy-continue16-v14-a34-update-r23. MAE 0.009476843374480385;
-combined preflight 366.5295590829919s; optimizer 321.44538975000614s;
-driver 22896394240 bytes; swap -300.0 MiB; finite/nonzero grads and exact
-roundtrip. Earlier accepted r23 v12->v13 and v13->v14 add 459.8922491669655s
-and 442.85232691600686s. Fresh v12/v13/v14 feedback passes unchanged gates.
-Qualified optimizer total 5433.657696418988s = 1.5093493601163857h.
-NOT multi-hour yet; no S5. All rejected exports remain excluded/unserved.
-The r23 source milestone 4c863f2 is committed and pushed; PR #4 stays OPEN.
-Continue16 rolling progress at 2026-11-04 02:01 Asia/Shanghai
-Qualified closed chain Updates=19, s4-policy-v19-396c36bc9da49b59.
-Qualified optimizer work this run: 7194.356125628052s = 1.9984322571189033h.
-Do NOT round this to two hours; one more whole qualified update is required
-for the conservative continue16-only two-hour target. Fresh AdamW per invocation.
-Latest accepted v18->v19: policy-continue16-v18-a47-update-r23/update-v18.json.
-Fresh v19 a48/a49 whole-group native parity/reference passes; exports fail
-swap +31.94 / +205.13 MiB and are never served or counted. Subsequent failures
-remain retained. No S5 work has begun. Source remains 4c863f2 (r23).
-Expanded batch a35 exhausts with no whole informative pair. After a36 native
-exits, an operator-owned CPU-only port guard checkpoints the controller before
-any further serving; the guard is released before a37. Focused a37..64 sampling
-is predeclared: task /75, up to 12 whole pairs per batch, first COMPLETE
-informative pair, no token-length selection or trimming; every start retained.
-All model loads stay sequential; independent 600s budgets and hard gates unchanged.
+NEXT: Primary multi-hour bounded measurement complete; optional S5 tests may start
+separately, metal default GRPO. To extend S4, stage qualified v20+adapter symlink
+in a FRESH directory; obtain fresh COMPLETE reconciled production-v20 group with
+genuine external reward spread (current[1,1] cannot train); stop serving; then
+bounded update --policy-version20 --aligned-arithmetic --chunked-affine-load
+--text-only-load --precompute-reference. Keep every gate, sequential loads and
+immutable verification unchanged. Serve only qualified children. No merge/force-push.
