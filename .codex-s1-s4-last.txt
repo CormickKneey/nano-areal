@@ -1,3 +1,37 @@
+S1-S4 continue16 measurement in progress - November 3, 2026
+
+QUALIFIED CLOSED CHAIN UPDATES = 3. Historical Updates=2 evidence is preserved.
+The third optimizer step and fresh child-v3 native feedback pass unchanged gates.
+Fresh v3 COMPLETE reconciled /75 feedback: policy-continue16-v3-a4-75-group-3,
+rewards [0,1], 8 turns / 833 tokens, native MAE 0.0068365937911671676 <= 0.01.
+Owned API 3390 and engine exit; port 8000 closes before matching native-v3 load.
+Its combined policy/reference preflight passes in 388.4028702499927s <= 600s;
+the same whole group is now being measured for a bounded v3 -> v4 update.
+New immutable child: s4-policy-v3-0283402fad5e03e0, parent exact qualified v2.
+Report: artifacts/s4/policy-continue16-v2-a3-update/update-v2.json
+Whole COMPLETE reconciled HumanEval/75 pair: policy-continue16-v2-a3-75-group-1.
+Rewards [0,1], advantages [-1,1], 8 turns / 836 response tokens.
+MAE 0.009480322236596254 <= 0.01; combined policy/reference preflight
+390.3566487909993s <= 600s; optimizer 366.0815499169985s <= 600s.
+Export snapshot 366.2753770829877s; finite/nonzero grad norm 0.2567727863788605.
+Driver peak 26206765056 <= 26800603136 bytes; 6724 valid nominal-100ms samples.
+Own swap 9920.94 -> 8014.06 MiB, delta -1906.88 MiB; exact immutable roundtrip;
+independently recomputed serialized adapter delta L1 290.5152745246887.
+
+NEW QUALIFIED OPTIMIZER WORK: 366.0815499169985s = 0.10168931942138847 hours.
+Only optimizer elapsed_seconds counts here; sampling, preflight, frozen-reference
+computation, IO, failed attempts and idle time do not count toward this target.
+This is NOT multi-hour GRPO. Fresh AdamW per invocation; S5 is not started.
+Controller plans/events: artifacts/s4/policy-continue16-control/.
+First /10 attempt: MAE 0.007714907642789618 passes, but frozen-reference replay
+hits unchanged 600s preflight limit; zero updates, no child.
+Second /75 attempt: MAE 0.01112106341688855 fails; zero updates, no child.
+All sampling/native failures retained. First controller import-path failure occurs
+after sampling and owned-server shutdown, before any native attempt; explicit
+resume reuses the unchanged selected pair, not a dead continue15 session.
+204 regression tests plus 7 MLX-probe tests pass (211 total).
+
+Historical authoritative continue14 closeout follows unchanged:
 S1-S4 continue14 closeout - November 2, 2026
 
 QUALIFIED CHAIN UPDATES = 2. S1/S2/S3 and the accepted continue13 step remain intact.

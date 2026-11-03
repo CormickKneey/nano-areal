@@ -1,6 +1,51 @@
-# S4 production policy preflight: November 2, 2026
+# S4 production policy preflight: November 3, 2026
 
-## Latest closeout: continue14, qualified chain Updates = 2
+## Continue16 measurement in progress
+
+The fully closed chain is now **Updates = 3**, preserving all historical v0/v1/v2
+evidence. A new bounded v2 -> v3 optimizer step passes all unchanged update gates
+and exports **s4-policy-v3-0283402fad5e03e0**. Its report
+is `artifacts/s4/policy-continue16-v2-a3-update/update-v2.json`; the entire
+COMPLETE reconciled fixed-task HumanEval/75 pair is
+`policy-continue16-v2-a3-75-group-1`, rewards **[0,1]**, advantages **[-1,1]**,
+**8 turns / 836 response tokens**. No episode subset or token trimming is used.
+
+- Behavior MAE **0.009480322236596254 <= 0.01**; combined policy/native-reference
+  preflight **390.3566487909993s <= 600s**. Frozen reference is gradient-free,
+  bound by hash, and remains inside the original independent phase.
+- Complete backward **365.8688100409927s**; optimizer report
+  **366.0815499169985s <= 600s**; immutable export snapshot
+  **366.2753770829877s <= 600s**. Finite/nonzero gradient norm
+  **0.2567727863788605**; exact immutable PEFT roundtrip; independently recomputed
+  serialized adapter delta L1 **290.5152745246887**.
+- **6724** valid nominal-100ms samples: driver peak
+  **26,206,765,056 <= 26,800,603,136 bytes**, allocated peak **21,123,195,392**.
+  Own swap **9920.94 -> 8014.06 MiB**, delta **-1906.88 MiB**. Existing system
+  swap is not reset or counted as newly allocated training memory.
+- New qualified optimizer work is **366.0815499169985s =
+  0.10168931942138847 hours**. This deliberately excludes sampling, preflight,
+  frozen-reference computation, IO, failed attempts and idle time. It is **not
+  multi-hour GRPO**. Fresh AdamW per invocation remains explicit; S5 is not started.
+
+The predeclared bounded controller plan and all events remain under
+`policy-continue16-control`. Its initial local import-path error occurs after
+sampling and owned API/engine shutdown, before any native attempt; an explicit
+resume retains the unchanged selected pair. No continue15 session is resumed.
+Native attempt 1 (/10, 1376 tokens) passes MAE **0.007714907642789618**, but hits
+the unchanged **600s** preflight limit while computing frozen reference; no
+optimizer or child export. Attempt 2 (/75, 891 tokens) fails MAE at
+**0.01112106341688855**; no optimizer or child export. All failed groups and
+native attempts remain retained. **211 tests pass** (204 regression + 7 MLX probe).
+
+Only the update-qualified child v3 is served next. Fresh production-v3 feedback
+`policy-continue16-v3-a4-75-group-3` is COMPLETE and reconciled, rewards **[0,1]**,
+**8 turns / 833 tokens**. Owned API **3390** and engine exit and port 8000 closes
+before native-v3 loads. Its native MAE **0.0068365937911671676 <= 0.01** passes;
+combined policy/reference preflight is **388.4028702499927s <= 600s**. This closes
+the third feedback cycle. The same entire informative group now enters a bounded
+v3 -> v4 update. No training/serving co-residency is introduced.
+
+## Historical closeout: continue14, qualified chain Updates = 2
 
 **Two bounded sequential policy updates now form one qualified immutable
 chain.** S1/S2/S3 and the prior accepted continue13 step remain intact:
