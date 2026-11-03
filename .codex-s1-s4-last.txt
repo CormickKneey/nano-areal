@@ -236,3 +236,18 @@ and 442.85232691600686s. Fresh v12/v13/v14 feedback passes unchanged gates.
 Qualified optimizer total 5433.657696418988s = 1.5093493601163857h.
 NOT multi-hour yet; no S5. All rejected exports remain excluded/unserved.
 The r23 source milestone 4c863f2 is committed and pushed; PR #4 stays OPEN.
+Continue16 rolling progress at 2026-11-04 02:01 Asia/Shanghai
+Qualified closed chain Updates=19, s4-policy-v19-396c36bc9da49b59.
+Qualified optimizer work this run: 7194.356125628052s = 1.9984322571189033h.
+Do NOT round this to two hours; one more whole qualified update is required
+for the conservative continue16-only two-hour target. Fresh AdamW per invocation.
+Latest accepted v18->v19: policy-continue16-v18-a47-update-r23/update-v18.json.
+Fresh v19 a48/a49 whole-group native parity/reference passes; exports fail
+swap +31.94 / +205.13 MiB and are never served or counted. Subsequent failures
+remain retained. No S5 work has begun. Source remains 4c863f2 (r23).
+Expanded batch a35 exhausts with no whole informative pair. After a36 native
+exits, an operator-owned CPU-only port guard checkpoints the controller before
+any further serving; the guard is released before a37. Focused a37..64 sampling
+is predeclared: task /75, up to 12 whole pairs per batch, first COMPLETE
+informative pair, no token-length selection or trimming; every start retained.
+All model loads stay sequential; independent 600s budgets and hard gates unchanged.

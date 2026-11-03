@@ -2040,3 +2040,18 @@ closes v12/v13/v14. Latest v14->v15 MAE 0.009476843374480385, combined preflight
 366.5295590829919s, driver 22,896,394,240 bytes, swap -300.0 MiB. All unchanged
 gates pass; rejected exports are never served. S5 remains unstarted.
 Source milestone `4c863f2` is pushed; earlier chronological measurements follow.
+# Continue16 rolling progress (2026-11-04 02:01 Asia/Shanghai)
+
+Qualified closed chain **Updates=19**, tip `s4-policy-v19-396c36bc9da49b59`.
+Continue16-only qualified optimizer work is **7194.356125628052s /
+1.9984322571189033h**. This is **not rounded to two hours**; another whole
+qualified update is required for the conservative current-run target.
+Latest accepted report: `policy-continue16-v18-a47-update-r23/update-v18.json`.
+Fresh v19 a48/a49 native policy/reference passes; their exported candidates
+fail swap +31.94/+205.13 MiB and are never served or counted. Source remains
+`4c863f2`; fresh AdamW per bounded invocation. S5 remains unstarted.
+After expanded a35 exhausts and a36 native exits, an operator-owned CPU-only
+port guard checkpoints the automatic controller before further serving, then
+releases. Focused a37..64 sampling predeclares task /75, up to 12 whole pairs
+per batch, first COMPLETE informative pair, no token-length selection/trimming,
+all starts retained. Independent 600s budgets and every hard gate stay unchanged.
