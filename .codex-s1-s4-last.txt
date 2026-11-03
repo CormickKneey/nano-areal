@@ -206,3 +206,22 @@ Acceptance is TWO BOUNDED FIXED-GROUP SEQUENTIAL UPDATES ONLY.
 No continuous multi-hour GRPO, persistent optimizer-state training, 8192-token training, train/serve co-residency,
 serving-device peak qualification or benchmark lift is claimed. Sampling wall-clock hours are NOT multi-hour GRPO.
 S5 preparation is not started. All owned training/probe/API/engine processes exit; port 8000 is not listening.
+Continue16 progress at 2026-11-03 18:44 Asia/Shanghai (supersedes totals below)
+Qualified closed chain remains Updates=11; memory-qualified v12 export awaits
+fresh production/native feedback: s4-policy-v12-ddcb9b0045f3e4f6.
+Opt-in r23 text-only loading validates every checkpoint key and shape but leaves
+830695424 bytes of unused frozen visual weights on meta; image inputs rejected.
+Default multimodal loading unchanged. Loader source is included in runtime hashes.
+Original /0 and whole /10 MAEs are bit-exact: 0.009696634512675821 and
+0.007422680729897122; preflights 170.4920348749729s and 340.62432683299994s.
+Same entire a25 /75 group: MAE 0.00936623164768221; policy+reference preflight
+385.0147690830054s; optimizer 349.32142720901174s; driver 23005446144 bytes;
+swap -856.0 MiB; finite/nonzero gradient and exact immutable roundtrip.
+Frozen reference hash and exported adapter bytes exactly match rejected r21 a25;
+no math, KV graph, reference-gradient or gate changes. Only r23 v12 may be served.
+Qualified optimizer work now 4209.46773058601s = 1.1692965918294472h.
+NOT multi-hour yet. Fresh AdamW per bounded update; S5 unstarted.
+243 tests pass; seven changed files pass Ruff. The loader retains the same 36
+pre-existing Ruff findings as its unchanged baseline; no unrelated reformatting.
+Evidence: artifacts/s4/policy-continue16-text-only-load and
+artifacts/s4/policy-continue16-v11-a25-update-r23/update-v11.json.

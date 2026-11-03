@@ -196,7 +196,7 @@ def qwen3vl_archon_key(key: str) -> str:
     raise ValueError(f"Unmapped native Qwen3-VL key: {key}")
 
 
-def load_qwen3vl_weights(model, checkpoint_path, device, dtype):
+def load_qwen3vl_weights(model, checkpoint_path, device, dtype, *, load_vision=True):
     from safetensors import safe_open
 
     path = Path(checkpoint_path)
@@ -222,12 +222,17 @@ def load_qwen3vl_weights(model, checkpoint_path, device, dtype):
                 tensor = weights.get_tensor(key)
                 if tensor.shape != expected_state[mapped].shape:
                     raise ValueError(f"Checkpoint shape mismatch: {key}")
-                state[mapped] = tensor.to(device=device, dtype=dtype)
+                if load_vision or not mapped.startswith("visual."):
+                    state[mapped] = tensor.to(device=device, dtype=dtype)
                 seen.add(mapped)
             model.load_state_dict(state, strict=False, assign=True)
     missing = expected - seen
     if missing:
         raise ValueError(f"Missing Qwen3-VL checkpoint keys: {sorted(missing)}")
-    if any(parameter.is_meta for parameter in model.parameters()):
+    if any(parameter.is_meta for name, parameter in model.named_parameters()
+           if load_vision or not name.startswith("visual.")):
         raise ValueError("Checkpoint left meta parameters uninitialized")
+    model.vision_weights_loaded = load_vision
+    if not load_vision:
+        model.visual.to(dtype=dtype).requires_grad_(False)
     return model

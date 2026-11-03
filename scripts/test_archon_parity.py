@@ -156,6 +156,76 @@ class ArchonParityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Missing"):
                 Qwen3VLModel.from_checkpoint(root)
 
+    def test_text_only_checkpoint_preserves_text_and_adapter_gradients(self):
+        from safetensors.torch import save_file
+
+        state = {qwen3vl_archon_key(key): value
+                 for key, value in self.model.state_dict().items()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.json").write_text(json.dumps(self.model.config))
+            save_file(state, str(root / "model.safetensors"))
+            full = Qwen3VLModel.from_checkpoint(root, dtype=torch.float32)
+            text = Qwen3VLModel.from_checkpoint(root, dtype=torch.float32,
+                                               load_vision=False)
+            self.assertTrue(full.vision_weights_loaded)
+            self.assertFalse(text.vision_weights_loaded)
+            self.assertTrue(all(parameter.is_meta
+                                and not parameter.requires_grad
+                                for parameter in text.visual.parameters()))
+            self.assertTrue(all(not parameter.is_meta
+                                for parameter in text.language_model.parameters()))
+            ids = torch.tensor([[3, 4, 5, 6]])
+            gradients = []
+            for model in (full, text):
+                torch.manual_seed(71)
+                add_lora(model, rank=2, alpha=4)
+                for layer in model.language_model.layers:
+                    with torch.no_grad():
+                        layer.attn.q_proj.lora_b.fill_(0.25)
+                        layer.attn.v_proj.lora_b.fill_(0.25)
+                scores = model(ids)
+                if model is full:
+                    expected = scores.detach().clone()
+                else:
+                    torch.testing.assert_close(scores, expected, rtol=0, atol=0)
+                scores.float().square().mean().backward()
+                gradients.append({name: parameter.grad.clone()
+                                  for name, parameter in model.named_parameters()
+                                  if parameter.requires_grad})
+            torch.testing.assert_close(gradients[1], gradients[0], rtol=0, atol=0)
+            self.assertTrue(all(bool(torch.isfinite(gradient).all())
+                                for gradient in gradients[1].values()))
+            self.assertTrue(any(bool(gradient.abs().any())
+                                for gradient in gradients[1].values()))
+            with self.assertRaisesRegex(ValueError, "Text-only checkpoint"):
+                text(ids, pixel_values=torch.zeros(4, 24),
+                     image_grid_thw=torch.tensor([[1, 2, 2]]))
+
+    def test_text_only_checkpoint_still_validates_vision_metadata(self):
+        from safetensors.torch import save_file
+
+        original = {qwen3vl_archon_key(key): value
+                    for key, value in self.model.state_dict().items()}
+        vision_key = next(key for key, value in original.items()
+                          if qwen3vl_hf_key(key).startswith("visual.")
+                          and value.ndim > 0 and value.shape[0] > 1)
+        language_key = next(key for key in original
+                            if qwen3vl_hf_key(key).startswith("language_model."))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.json").write_text(json.dumps(self.model.config))
+            for missing in (vision_key, language_key):
+                state = {key: value for key, value in original.items()
+                         if key != missing}
+                save_file(state, str(root / "model.safetensors"))
+                with self.assertRaisesRegex(ValueError, "Missing"):
+                    Qwen3VLModel.from_checkpoint(root, load_vision=False)
+            state = {**original, vision_key: original[vision_key][:1]}
+            save_file(state, str(root / "model.safetensors"))
+            with self.assertRaisesRegex(ValueError, "shape mismatch"):
+                Qwen3VLModel.from_checkpoint(root, load_vision=False)
+
     def test_adapter_context_and_mlx_export(self):
         from safetensors.torch import load_file
 

@@ -1,5 +1,6 @@
 """Bound native cache replay, provenance checks and checkpointed LoRA gradients."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -72,6 +73,19 @@ def test_chunked_head_load_preserves_native_scores_and_gradients():
             runtime.close()
     for actual, expected in zip(results[1], results[0], strict=True):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_bound_runtime_binds_checkpoint_loader_source():
+    from nano_areal.archon import state_dict
+
+    trainer, quantized, episodes = aligned_fixture()
+    runtime = AlignedS4Runtime(trainer, quantized, episodes)
+    try:
+        assert str(Path(state_dict.__file__).resolve()) in runtime.source_sha256
+        assert runtime.contract()["vision_weights_loaded"]
+        assert runtime.contract()["unmaterialized_frozen_vision_bytes"] == 0
+    finally:
+        runtime.close()
 
 
 def test_bound_native_checkpoint_cache_has_complete_history_gradients():

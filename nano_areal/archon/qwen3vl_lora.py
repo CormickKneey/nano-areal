@@ -169,10 +169,11 @@ class Qwen3VLLoRATrainer:
 
 
 class NativeQwen3VLLoRATrainer(Qwen3VLLoRATrainer):
-    def __init__(self, model_path: Path, lr: float = 1e-4):
+    def __init__(self, model_path: Path, lr: float = 1e-4, *, text_only=False):
         from nano_areal.archon.qwen3vl import Qwen3VLModel, add_lora
 
-        self.model = Qwen3VLModel.from_checkpoint(model_path, "mps")
+        self.model = Qwen3VLModel.from_checkpoint(
+            model_path, "mps", load_vision=not text_only)
         add_lora(self.model)
         self.model.gradient_checkpointing = True
         self.parameters = {

@@ -148,6 +148,7 @@ def main():
     parser.add_argument("--aligned-arithmetic", action="store_true")
     parser.add_argument("--precompute-reference", action="store_true")
     parser.add_argument("--chunked-affine-load", action="store_true")
+    parser.add_argument("--text-only-load", action="store_true")
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
@@ -160,6 +161,8 @@ def main():
         parser.error("Reference precomputation requires an aligned bounded update")
     if args.chunked_affine_load and not args.aligned_arithmetic:
         parser.error("Chunked affine loading requires aligned arithmetic")
+    if args.text_only_load and not args.aligned_arithmetic:
+        parser.error("Text-only loading requires aligned arithmetic")
     try:
         path = phase_paths(args.output, args.phase, args.policy_version)
     except (ValueError, FileExistsError) as error:
@@ -208,7 +211,8 @@ def main():
         if trace:
             trace.thread.start()
         torch.manual_seed(42)
-        trainer = NativeQwen3VLLoRATrainer(args.train_model)
+        trainer = NativeQwen3VLLoRATrainer(
+            args.train_model, **({"text_only": True} if args.text_only_load else {}))
         trainer.model.eval()
         torch.mps.synchronize()
         report["memory_loaded"] = memory_snapshot(os.getpid())

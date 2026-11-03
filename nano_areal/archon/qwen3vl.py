@@ -246,6 +246,7 @@ class Qwen3VLModel(nn.Module):
         self.config = config
         self.language_model = NativeLanguageModel(config["text_config"])
         self.visual = VisionTransformer(config["vision_config"])
+        self.vision_weights_loaded = True
         self.tied = config.get("tie_word_embeddings", False)
         self.lm_head = (
             None
@@ -319,6 +320,8 @@ class Qwen3VLModel(nn.Module):
         attention_mask: Tensor | None = None,
         logits_to_keep=0,
     ):
+        if pixel_values is not None and not self.vision_weights_loaded:
+            raise ValueError("Text-only checkpoint has no materialized vision weights")
         if (pixel_values is None) != (image_grid_thw is None):
             raise ValueError("Pixels and image grid must be supplied together")
         if (
@@ -376,13 +379,14 @@ class Qwen3VLModel(nn.Module):
         return F.linear(hidden, weight)
 
     @classmethod
-    def from_checkpoint(cls, path: str | Path, device="cpu", dtype=torch.bfloat16):
+    def from_checkpoint(cls, path: str | Path, device="cpu", dtype=torch.bfloat16,
+                        *, load_vision=True):
         from nano_areal.archon.state_dict import load_qwen3vl_weights
 
         path = Path(path)
         with torch.device("meta"):
             model = cls(json.loads((path / "config.json").read_text()))
-        load_qwen3vl_weights(model, path, device, dtype)
+        load_qwen3vl_weights(model, path, device, dtype, load_vision=load_vision)
         model.language_model.rope = InterleavedMRoPE(model.config["text_config"]).to(
             device
         )

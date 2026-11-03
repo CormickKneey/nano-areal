@@ -13,6 +13,7 @@ from safetensors import safe_open
 from nano_areal.archon import model, qwen3vl, qwen3vl_lora, s4_metal, s4_operators
 from nano_areal.archon import s4_replay as replay_source
 from nano_areal.archon import s4_update as update_source
+from nano_areal.archon import state_dict as state_source
 from nano_areal.archon.model import RMSNorm
 from nano_areal.archon.s4_metal import differentiable_metal_rms
 from nano_areal.archon.s4_operators import (
@@ -77,6 +78,7 @@ class AlignedS4Runtime:
             Path(qwen3vl_lora.__file__), Path(s4_metal.__file__),
             Path(s4_operators.__file__), Path(replay_source.__file__),
             Path(update_source.__file__),
+            Path(state_source.__file__),
         )}
         try:
             self.install(quantized)
@@ -321,13 +323,21 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": ("native-s4-affine-cache-r21" if self.chunked_affine_load
-                         else "native-s4-affine-cache-r20"),
+        name = ("native-s4-affine-cache-r21" if self.chunked_affine_load
+                else "native-s4-affine-cache-r20")
+        if not self.trainer.model.vision_weights_loaded:
+            name = "native-s4-affine-cache-r23"
+        return {"name": name,
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "cache_reclaim_interval_segments": 144,
                 "affine_head_load_rows": 1024 if self.chunked_affine_load else None,
+                "vision_weights_loaded": self.trainer.model.vision_weights_loaded,
+                "unmaterialized_frozen_vision_bytes": sum(
+                    parameter.numel() * parameter.element_size()
+                    for parameter in self.trainer.model.visual.parameters()
+                    if parameter.is_meta),
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
                                "batch frozen-linear/Split-KV gradients over 16 rows",
                 "selective_checkpoint": "Retain tokenwise gate/down matrix products "

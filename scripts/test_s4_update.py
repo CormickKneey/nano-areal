@@ -119,6 +119,25 @@ def test_chunked_affine_load_requires_alignment(tmp_path, monkeypatch, phase):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("phase", ["prepare", "preflight", "update"])
+def test_text_only_load_requires_alignment(tmp_path, monkeypatch, phase):
+    monkeypatch.setattr("sys.argv", [
+        "probe_s4_training.py", phase, "--infer-model", "unused",
+        "--train-model", "unused", "--group", "unused", "--output",
+        str(tmp_path), "--text-only-load",
+    ])
+
+    def reject_server_check():
+        pytest.fail("Invalid text-only loading must be rejected before model loading")
+
+    monkeypatch.setattr(probe_s4_training, "require_stopped_server",
+                        reject_server_check)
+    with pytest.raises(SystemExit) as error:
+        probe_s4_training.main()
+    assert error.value.code == 2
+    assert not list(tmp_path.iterdir())
+
+
 class TinyPolicy(torch.nn.Module):
     def __init__(self):
         super().__init__()

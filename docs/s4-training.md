@@ -2008,3 +2008,24 @@ PYTHONPATH=. .venv/bin/python scripts/probe_s4_training.py preflight \
 Validation: **106 regression tests pass**, targeted Ruff and `git diff --check`
 pass. Owned production servers are stopped; caches, weights and raw evidence
 remain repository-local and ignored. No multi-hour GRPO was started.
+# Continue16 r23 progress (2026-11-03 18:44 Asia/Shanghai)
+
+Closed chain: **Updates=11**, with memory-qualified v12
+`s4-policy-v12-ddcb9b0045f3e4f6` awaiting fresh child feedback.
+Qualified optimizer work: **4209.46773058601 seconds (1.1692965918294472 hours)**;
+this is **not yet multi-hour GRPO**. S5 remains unstarted.
+
+Opt-in `--text-only-load` with aligned arithmetic leaves 830,695,424 bytes of
+unused frozen vision parameters unmaterialized. Every checkpoint key and shape
+is still checked; image inputs are explicitly rejected. Default multimodal
+loading stays unchanged, and runtime evidence now binds the loader source.
+Original /0 and whole /10 MAEs remain exactly 0.009696634512675821 and
+0.007422680729897122 (170.4920348749729s and 340.62432683299994s).
+The unchanged entire a25 /75 group yields MAE 0.00936623164768221, combined
+policy/reference preflight 385.0147690830054s, optimizer 349.32142720901174s,
+driver peak 23,005,446,144 bytes, and swap -856.0 MiB. Frozen-reference hash
+and exported adapter bytes exactly match rejected r21 a25. All original hard
+gates pass; no arithmetic, reference-gradient, graph or deadline relaxation.
+Evidence: `artifacts/s4/policy-continue16-v11-a25-update-r23/update-v11.json`.
+243 tests pass. Changed files pass Ruff except the loader's unchanged set of
+36 pre-existing findings. Earlier rolling progress follows.
