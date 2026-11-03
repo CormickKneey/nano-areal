@@ -1,9 +1,9 @@
 # S4 production policy preflight: November 3, 2026
 
-## Continue16 rolling measurement: 15:40 Asia/Shanghai
+## Continue16 rolling measurement: 17:40 Asia/Shanghai
 
-**Closed feedback chain Updates = 10**, with an additional memory-qualified v11
-export **s4-policy-v11-408f1a522b6f864c** awaiting fresh native feedback. New
+**Closed feedback chain Updates = 11**, at immutable
+**s4-policy-v11-408f1a522b6f864c**. No qualified v12 exists. New
 qualified optimizer work totals **3860.146303376998s = 1.072262862049166 hours**.
 This excludes sampling, preflight/reference, IO and rejected attempts. **Multi-hour
 GRPO is NOT yet measured; S5 is not started.** Fresh AdamW per invocation remains
@@ -39,6 +39,33 @@ The local a15 controller cleanup races with an already exiting child; owned API
 **39674**, engine **39681** and tracker **39680** are verified absent, port 8000
 closed, before native resumes on the unchanged selected pair. All original
 failure/recovery evidence is retained. No training source changes after `fe0a03f`.
+
+Fresh v11 a21 /75 feedback is COMPLETE/reconciled (**881 tokens**), native MAE
+**0.00888789211326912**, combined preflight **406.82065941701876s**. This closes
+v11 feedback, but the following v12 export fails **swap +75.18 MiB**. a25 fails
+**swap +317.56 MiB**; a22 /54, a24 /75 and a26 /75 fail MAE at
+**0.011329497088753413 / 0.01226110114479078 / 0.010856491889993275**. a20 and a23
+hit the unchanged preflight deadline. None adds qualified optimizer time or a
+qualified child; every start and failed export remains retained.
+
+An **unpromoted r22 experiment** reclaims unused MPS allocator cache every **36**
+segments instead of **144**. Original /0 and whole /10 MAEs reproduce exactly;
+**248 candidate tests** include live-graph gradient equality through cache reclaim.
+On the unchanged complete a25 pair, native MAE and frozen-reference hash remain
+identical and the entire adapter file is byte-identical, but driver peak stays
+**23,441,653,760 bytes** and swap still grows **+213.38 MiB**. Optimizer
+**354.1788309160038s** is rejected work, not qualified-chain time. Patch, source
+snapshots and all failed evidence remain under `policy-continue16-cache-reclaim`.
+The four experimental source/test files are restored **byte-for-byte** to
+`fe0a03f`; accepted baseline remains **r21 / 237 tests**, not the candidate's 248.
+No source edits occur during a native phase, and no rejected r22 export is served.
+
+An explicit new bounded plan (`policy-continue16-control/expanded-plan.json`)
+declares attempts **27..48** and additional existing cached fixed tasks before
+any new starts. Each pair remains one fixed task; selection is the first whole
+COMPLETE reconciled informative pair in declared order. No task pooling,
+episode subsets, token-length filtering, trimming or fabricated rewards. The
+exact qualified v11 is the only parent; all original gates remain unchanged.
 
 **237 tests pass**. Further bounded measurement continues under opt-in r21; no
 rejected export is served or used as a parent. These are selected engineering

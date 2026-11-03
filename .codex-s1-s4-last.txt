@@ -1,7 +1,7 @@
 S1-S4 continue16 measurement in progress - November 3, 2026
 
-LATEST ROLLING STATUS (15:40 Asia/Shanghai): closed feedback chain Updates=10;
-memory-qualified v11 s4-policy-v11-408f1a522b6f864c awaits fresh native feedback.
+LATEST ROLLING STATUS (17:40 Asia/Shanghai): closed feedback chain Updates=11,
+tip s4-policy-v11-408f1a522b6f864c. No qualified v12 exists.
 Qualified v6: s4-policy-v6-45d8b30911151ace. Both continue from exact qualified
 parents; rejected exports remain unused. New qualified optimizer work is
 3860.146303376998s = 1.072262862049166 hours, excluding all sampling,
@@ -26,6 +26,22 @@ swap +660.31 MiB. Both remain rejected; no rejected export becomes a parent.
 Controller-only a15 cleanup race happens after owned child exit; API 39674,
 engine 39681 and tracker 39680 are absent and port closed before explicitly
 resuming native from the unchanged selected pair. Recovery evidence is retained.
+Fresh v11 a21 /75 feedback is COMPLETE/reconciled (881 tokens), native MAE
+0.00888789211326912 and combined preflight 406.82065941701876s pass. Its subsequent
+v12 export fails swap +75.18 MiB and never becomes a parent. a25 also fails swap
++317.56 MiB; a22 /54 MAE 0.011329497088753413, a24 /75 MAE 0.01226110114479078,
+a26 /75 MAE 0.010856491889993275, and a20/a23 deadline failures remain rejected.
+An unpromoted r22 36-segment cache-reclaim experiment reproduces original /0 and
+/10 MAEs exactly and passes 248 candidate tests, but its same whole a25 update
+still fails swap +213.38 MiB. Driver peak 23441653760 is unchanged, optimizer
+354.1788309160038s, same frozen-reference hash and byte-identical adapter. It is
+NOT accepted. Patch, source snapshots, tests and failure logs remain under
+policy-continue16-cache-reclaim. All four modified source/test files are restored
+byte-for-byte to fe0a03f; accepted source/test baseline remains r21 / 237 tests.
+The controller exits after unchanged a26; no source edits occur during a native
+phase. Expanded predeclared fixed-task sampling resumes from qualified v11 for
+attempts 27..48, with unchanged r21 and ALL original gates. No tasks are pooled,
+episodes subsetted, tokens trimmed, rewards fabricated or failed exports served.
 
 Earlier r21 milestone (superseded totals):
 LATEST MILESTONE: closed feedback chain Updates=4; memory-qualified v5 export
