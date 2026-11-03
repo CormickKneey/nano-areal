@@ -1,5 +1,24 @@
 S1-S4 continue16 measurement in progress - November 3, 2026
 
+LATEST ROLLING STATUS (14:00 Asia/Shanghai): closed feedback chain Updates=6;
+memory-qualified v7 s4-policy-v7-6b85ec7004ac4fcc awaits fresh native feedback.
+Qualified v6: s4-policy-v6-45d8b30911151ace. Both continue from exact qualified
+parents; rejected exports remain unused. New qualified optimizer work is
+2178.1816964179743s = 0.6050504712272151 hours, excluding all sampling,
+preflight/reference, IO and rejected attempts. Multi-hour GRPO is NOT yet measured.
+v5 -> v6 report: policy-continue16-v5-a10-update-r21/update-v5.json; MAE
+0.009274460953603153, preflight 519.2186792499851s, optimizer 486.3300367089687s,
+driver 24095965184, swap -19.88 MiB, serialized delta 291.3351138830185.
+v6 -> v7 report: policy-continue16-v6-a13-update-r21/update-v6.json; MAE
+0.00907836544016997, preflight 430.58975312503753s, optimizer 405.33873016701546s,
+driver 23693312000, swap -614.32 MiB, serialized delta 291.8929268717766.
+Both have finite/nonzero gradients and exact immutable roundtrips; complete
+fresh parent feedback is reconciled and owned API/engine stop before native load.
+The a12 /75 attempt fails MAE 0.011191955569665879; zero optimizer/export.
+All independent 600s, MAE, driver and no-swap-growth gates remain unchanged.
+237 tests pass. S5 is not started. Further measurement is running under r21.
+
+Earlier r21 milestone (superseded totals):
 LATEST MILESTONE: closed feedback chain Updates=4; memory-qualified v5 export
 s4-policy-v5-46ff80282bf372fb awaits fresh child feedback. Never serve the rejected
 s4-policy-v5-4c563cb8410fb7b8 from the earlier r20 a8 attempt.

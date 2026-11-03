@@ -1,6 +1,37 @@
 # S4 production policy preflight: November 3, 2026
 
-## Continue16 latest milestone: opt-in bounded head loading
+## Continue16 rolling measurement: 14:00 Asia/Shanghai
+
+**Closed feedback chain Updates = 6**, with an additional memory-qualified v7
+export **s4-policy-v7-6b85ec7004ac4fcc** awaiting fresh native feedback. New
+qualified optimizer work totals **2178.1816964179743s = 0.6050504712272151 hours**.
+This excludes sampling, preflight/reference, IO and rejected attempts. **Multi-hour
+GRPO is NOT yet measured; S5 is not started.** Fresh AdamW per invocation remains
+explicit. The independent **600s**, **MAE <= 0.01**, **driver <= 26,800,603,136**,
+no-swap-growth, finite/nonzero-gradient and immutable-roundtrip gates are unchanged.
+
+| Memory-qualified step | Complete-group MAE | Combined preflight (s) | Optimizer (s) | Driver peak (bytes) | Own swap delta (MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v2 -> v3, a3 r20 | 0.009480322236596254 | 390.3566487909993 | 366.0815499169985 | 26206765056 | -1906.88 |
+| v3 -> v4, a5 r20 | 0.008632034094075952 | 419.6429217499681 | 397.0909252499696 | 26206765056 | -303.75 |
+| v4 -> v5, a8 r21 | 0.008996416003928153 | 548.7512551670079 | 523.3404543750221 | 24322457600 | -2333.31 |
+| v5 -> v6, a10 r21 | 0.009274460953603153 | 519.2186792499851 | 486.3300367089687 | 24095965184 | -19.88 |
+| v6 -> v7, a13 r21 | 0.00907836544016997 | 430.58975312503753 | 405.33873016701546 | 23693312000 | -614.32 |
+
+Qualified v6 is **s4-policy-v6-45d8b30911151ace**. The last two reports are
+`policy-continue16-v5-a10-update-r21/update-v5.json` and
+`policy-continue16-v6-a13-update-r21/update-v6.json`. Independently serialized
+adapter deltas are **291.3351138830185 / 291.8929268717766**; both have finite,
+present, nonzero gradients and exact immutable roundtrips. Their entire fresh
+parent feedback groups are COMPLETE and reconciled, with API/engine stopped
+before native loading. Earlier a12 fails **MAE 0.011191955569665879** and performs
+no optimizer/export. Every failed or homogeneous group remains retained.
+
+**237 tests pass**. Further bounded measurement continues under opt-in r21; no
+rejected export is served or used as a parent. These are selected engineering
+groups, not benchmark accuracy, pass@k or improvement evidence.
+
+## Earlier continue16 milestone: opt-in bounded head loading
 
 **Closed feedback chain Updates = 4**. A fifth memory-qualified optimizer/export
 now exists; its fresh child-v5 native feedback is pending. Qualified v4 is
