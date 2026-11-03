@@ -23,6 +23,29 @@ from nano_areal.archon.s4_operators import (
 )
 
 
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("rows", [1, 3, 16])
+@pytest.mark.parametrize("chunk_size", [1, 4, 1024])
+def test_chunked_affine_load_is_exact(device, rows, chunk_size):
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is required")
+    torch.manual_seed(73)
+    packed = torch.randint(0, 2 ** 32, (rows, 16), dtype=torch.int64, device=device)
+    scales = torch.randn(rows, 2, dtype=torch.bfloat16, device=device)
+    biases = torch.randn_like(scales)
+    expected = affine_weights(packed, scales, biases)
+    actual = affine_weights(packed, scales, biases, row_chunk_size=chunk_size)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("chunk_size", [0, -1, 1.5, True])
+def test_chunked_affine_load_rejects_invalid_chunk_size(chunk_size):
+    packed = torch.zeros((3, 8), dtype=torch.int64)
+    scales = torch.ones((3, 1), dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match="positive integer"):
+        affine_weights(packed, scales, scales, row_chunk_size=chunk_size)
+
+
 def test_shared_projection_uses_original_prefill_shape():
     packed = torch.full((256, 128), 0x76543210, dtype=torch.int64)
     scales = torch.full((256, 16), 0.015625, dtype=torch.bfloat16)

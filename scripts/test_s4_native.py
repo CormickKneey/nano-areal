@@ -52,6 +52,28 @@ def aligned_fixture():
     return trainer, quantized, episodes
 
 
+def test_chunked_head_load_preserves_native_scores_and_gradients():
+    results = []
+    for chunked in (False, True):
+        trainer, quantized, episodes = aligned_fixture()
+        runtime = AlignedS4Runtime(trainer, quantized, episodes,
+                                   chunked_affine_load=chunked)
+        try:
+            trainer.model.train()
+            scores = trainer.response_group_logprobs(runtime.history)
+            sum(score.sum() for score in scores).backward()
+            results.append((runtime.head[0].detach().cpu().clone(),
+                            [score.detach().cpu().clone() for score in scores],
+                            {name: parameter.grad.detach().cpu().clone()
+                             for name, parameter in trainer.parameters.items()}))
+            assert runtime.contract()["affine_head_load_rows"] == (
+                1024 if chunked else None)
+        finally:
+            runtime.close()
+    for actual, expected in zip(results[1], results[0], strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 def test_bound_native_checkpoint_cache_has_complete_history_gradients():
     trainer, quantized, episodes = aligned_fixture()
     runtime = AlignedS4Runtime(trainer, quantized, episodes)

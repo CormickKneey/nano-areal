@@ -118,7 +118,8 @@ def test_sampler_failure_preserves_primary_error_report(
         monkeypatch.setattr(probe_s4_training, "restore", lambda *args: None)
         monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
         monkeypatch.setattr(s4_native, "load_affine_projections", lambda binding: {})
-        monkeypatch.setattr(s4_native, "AlignedS4Runtime", lambda *args: runtime)
+        monkeypatch.setattr(s4_native, "AlignedS4Runtime",
+                            lambda *args, **kwargs: runtime)
     with pytest.raises(ValueError, match="Primary load failure"):
         probe_s4_training.main()
     report = json.loads((tmp_path / "update.json").read_text())

@@ -51,7 +51,7 @@ def load_affine_projections(binding):
 
 
 class AlignedS4Runtime:
-    def __init__(self, trainer, quantized, episodes):
+    def __init__(self, trainer, quantized, episodes, *, chunked_affine_load=False):
         self.trainer = trainer
         self.history = [trajectory_from_turn(turn)[0]
                         for episode in episodes for turn in episode["turns"]]
@@ -66,6 +66,7 @@ class AlignedS4Runtime:
         self.states = {}
         self.reference_cache = None
         self.group_replay = False
+        self.chunked_affine_load = chunked_affine_load
         self.handles = []
         self.forwards = []
         self.activation_states = []
@@ -140,7 +141,11 @@ class AlignedS4Runtime:
         device = model.language_model.embed_tokens.weight.device
         packed, scales, biases = [value.to(device)
                                   for value in quantized["language_model.embed_tokens"]]
-        self.head = affine_weights(packed, scales, biases), biases.float()
+        if self.chunked_affine_load:
+            torch.mps.empty_cache()
+        self.head = affine_weights(
+            packed, scales, biases,
+            row_chunk_size=1024 if self.chunked_affine_load else None), biases.float()
         if not torch.equal(self.head[0].bfloat16(),
                            model.language_model.embed_tokens.weight):
             raise ValueError("Bound affine head differs from the native embedding")
@@ -316,11 +321,13 @@ class AlignedS4Runtime:
         return result
 
     def contract(self):
-        return {"name": "native-s4-affine-cache-r20",
+        return {"name": ("native-s4-affine-cache-r21" if self.chunked_affine_load
+                         else "native-s4-affine-cache-r20"),
                 "source_sha256": self.source_sha256,
                 "prefix_block_size": 16, "decode_partition_size": 512,
                 "decode_checkpoint_chunk_size": 16,
                 "cache_reclaim_interval_segments": 144,
+                "affine_head_load_rows": 1024 if self.chunked_affine_load else None,
                 "decode_rows": "Tokenwise frozen projections and causal attention; "
                                "batch frozen-linear/Split-KV gradients over 16 rows",
                 "selective_checkpoint": "Retain tokenwise gate/down matrix products "

@@ -147,6 +147,7 @@ def main():
     parser.add_argument("--max-logprob-mae", type=float, default=0.01)
     parser.add_argument("--aligned-arithmetic", action="store_true")
     parser.add_argument("--precompute-reference", action="store_true")
+    parser.add_argument("--chunked-affine-load", action="store_true")
     args = parser.parse_args()
     if not 0 < args.max_logprob_mae <= 0.01:
         parser.error("The behavior MAE bound must be positive and at most 0.01")
@@ -157,6 +158,8 @@ def main():
     if args.precompute_reference and (args.phase != "update"
                                      or not args.aligned_arithmetic):
         parser.error("Reference precomputation requires an aligned bounded update")
+    if args.chunked_affine_load and not args.aligned_arithmetic:
+        parser.error("Chunked affine loading requires aligned arithmetic")
     try:
         path = phase_paths(args.output, args.phase, args.policy_version)
     except (ValueError, FileExistsError) as error:
@@ -250,7 +253,8 @@ def main():
                 )
 
                 aligned_runtime = AlignedS4Runtime(
-                    trainer, load_affine_projections(binding), episodes)
+                    trainer, load_affine_projections(binding), episodes,
+                    chunked_affine_load=args.chunked_affine_load)
                 report["training_arithmetic"] = {
                     **aligned_runtime.contract(), "policy_model": binding.model,
                     "probe_source_sha256": file_digest(Path(__file__)),

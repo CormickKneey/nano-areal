@@ -1,6 +1,65 @@
 # S4 production policy preflight: November 3, 2026
 
-## Continue16 measurement in progress
+## Continue16 latest milestone: opt-in bounded head loading
+
+**Closed feedback chain Updates = 4**. A fifth memory-qualified optimizer/export
+now exists; its fresh child-v5 native feedback is pending. Qualified v4 is
+**s4-policy-v4-3fd85d9e1f210f8c**; the new export is
+**s4-policy-v5-46ff80282bf372fb**. S1/S2/S3 and all earlier immutable evidence
+remain intact. **Multi-hour GRPO is not yet measured; S5 is not started.**
+
+Repeated swap-blocked exports motivate opt-in **r21** `--chunked-affine-load`.
+It constructs the same frozen fp32 affine head in **1024-row chunks**, reclaiming
+unused allocator cache before head construction. Whole-head r20 loading remains
+the default. No arithmetic, loss, KV graph, allocator limit or independent **600s**
+budget changes. CPU/MPS row-chunk tests and native score/gradient tests require
+exact equality; **237 tests pass in 11.82s**. The option is rejected before model
+loading unless `--aligned-arithmetic` is supplied.
+
+New source-bound original /0 and complete /10 reproduce MAEs **exactly**:
+**0.009696634512675821 / 0.007422680729897122**, in
+**170.15340020804433 / 341.9018179170089s**. Evidence:
+`policy-continue16-r21-source-0/preflight.json` and
+`policy-continue16-r21-source-10/preflight.json`.
+
+The unchanged entire v4 a8 /75 group (**1189 tokens**, rewards **[1,0]**) is
+re-evaluated in a **fresh** output directory, never overwriting its rejected r20
+attempt. Report: `policy-continue16-v4-a8-update-r21/update-v4.json`.
+
+| Check | New independent r21 measurement |
+| --- | ---: |
+| Behavior MAE, exactly unchanged | 0.008996416003928153 |
+| Combined policy/frozen-reference preflight | 548.7512551670079s <= 600s |
+| Complete backward/optimizer report | 523.3404543750221s <= 600s |
+| Immutable export snapshot | 523.5702779580024s <= 600s |
+| Sampled driver peak | 24,322,457,600 <= 26,800,603,136 bytes |
+| Own swap delta | -2333.31 MiB |
+| Finite/nonzero gradient norm | 0.2139706313610077 |
+| Independently serialized adapter delta L1 | 291.5389885902405 |
+
+The **9524** valid nominal-100ms samples cover loading, preflight, update and
+export. Frozen-reference hash
+`026e850e49f2ff529fdd4c8bd97f40f66f672435f13e83a18e4162a460191f28` is unchanged.
+The entire serialized adapter file is **byte-identical** to the earlier r20 a8
+export, while driver peak drops from **26,206,765,056** to **24,322,457,600 bytes**.
+The earlier **s4-policy-v5-4c563cb8410fb7b8** remains rejected for **+1603.57 MiB**
+swap and is never served. Only the new independently memory-qualified export can
+be served. Its immutable parent/group hashes and exact PEFT roundtrip verify.
+
+New qualified optimizer work totals **1286.5129295419902s =
+0.3573647026505528 hours**. Sampling, preflight/reference, IO and rejected work
+are excluded. Each invocation starts fresh AdamW. The initial controller exits
+after unchanged a9 hits its preflight deadline, before source edits; explicit
+r21 continuation starts from qualified v5. Rejected exports never become parents.
+
+Reproduction: stage the bound parent manifest and adapter symlink in a fresh
+directory, then add `--chunked-affine-load` to the existing
+`update --policy-version N --aligned-arithmetic --precompute-reference` command.
+All original complete-group, MAE, driver, no-swap-growth, gradient, deadline and
+immutable-export gates still apply. Collect fresh complete child feedback, stop
+owned API/engine and close port 8000, then run matching native parity.
+
+## Earlier continue16 progress (superseded totals)
 
 The fully closed chain is now **Updates = 3**, preserving all historical v0/v1/v2
 evidence. A new bounded v2 -> v3 optimizer step passes all unchanged update gates
@@ -44,6 +103,32 @@ before native-v3 loads. Its native MAE **0.0068365937911671676 <= 0.01** passes;
 combined policy/reference preflight is **388.4028702499927s <= 600s**. This closes
 the third feedback cycle. The same entire informative group now enters a bounded
 v3 -> v4 update. No training/serving co-residency is introduced.
+
+### Further bounded measurement (in progress)
+
+The first v3 -> v4 attempt (`policy-continue16-v3-a4-update`) completes an optimizer
+in **342.8980350419879s**, but its own swap grows **+799.57 MiB**. The exported
+**s4-policy-v4-fab898fd3137348d** is **rejected**, never served, and never used as a
+parent. Rejected optimizer work is recorded separately, not counted as qualified
+chain work.
+
+The next independent whole /75 pair (`policy-continue16-v3-a5-75-group-1`, **909
+tokens**, rewards **[0,1]**) qualifies a different immutable child:
+**s4-policy-v4-3fd85d9e1f210f8c**. Report:
+`policy-continue16-v3-a5-update/update-v3.json`.
+MAE **0.008632034094075952**; combined preflight **419.6429217499681s**;
+optimizer **397.0909252499696s**; export **397.25951445900137s**; driver
+**26,206,765,056 bytes**; own swap **-303.75 MiB**; finite/nonzero gradient norm
+**0.1813056319952011**; exact roundtrip; independently serialized delta
+**290.82368713617325**. All original gates remain unchanged.
+
+New qualified optimizer work totals **763.1724751669681s =
+0.21199235421304669 hours**. Fresh child-v4 native feedback qualification is
+pending; the fully closed feedback count remains **3**. Its first informative
+pair (a6, **2158 tokens**) has MAE **0.008920769036255232**, but the combined
+frozen-reference preflight hits **600s**, so there is no v5 update/export.
+The next declared sampling batch (a7) exhausts without an informative COMPLETE
+pair. All starts/failures remain retained; a8 measures a fresh entire pair.
 
 ## Historical closeout: continue14, qualified chain Updates = 2
 

@@ -1,5 +1,46 @@
 S1-S4 continue16 measurement in progress - November 3, 2026
 
+LATEST MILESTONE: closed feedback chain Updates=4; memory-qualified v5 export
+s4-policy-v5-46ff80282bf372fb awaits fresh child feedback. Never serve the rejected
+s4-policy-v5-4c563cb8410fb7b8 from the earlier r20 a8 attempt.
+Opt-in --chunked-affine-load (r21) loads the SAME frozen fp32 head in 1024-row
+chunks and reclaims unused allocator cache before head construction. Whole-head
+r20 loading stays the default. No KV detachment, arithmetic/loss change, allocator
+limit change or extended phase budget. The complete new adapter file is BYTE
+IDENTICAL to the earlier rejected a8 export; only the new independent invocation
+qualifies under its own measured memory baseline.
+Source-bound original /0 and whole /10 MAEs reproduce EXACTLY:
+0.009696634512675821 / 0.007422680729897122, in 170.15340020804433 / 341.9018179170089s.
+Evidence: policy-continue16-r21-source-{0,10}/preflight.json.
+Whole v4 a8 group (1189 tokens): MAE 0.008996416003928153 unchanged; frozen reference
+hash 026e850e49f2ff529fdd4c8bd97f40f66f672435f13e83a18e4162a460191f28 unchanged;
+combined preflight 548.7512551670079s; optimizer 523.3404543750221s; export
+523.5702779580024s. Driver peak 24322457600 <= 26800603136, swap -2333.31 MiB,
+finite/nonzero grad norm 0.2139706313610077, exact roundtrip, serialized delta
+291.5389885902405. Report: policy-continue16-v4-a8-update-r21/update-v4.json.
+237 tests pass in 11.82s; the added option requires aligned arithmetic before load.
+NEW QUALIFIED OPTIMIZER WORK: 1286.5129295419902s = 0.3573647026505528h.
+NOT multi-hour GRPO; S5 remains unstarted. Fresh AdamW per bounded invocation.
+The previous bounded controller exits after unchanged a9 preflight hits 600s,
+before source edits. An explicit r21 controller will continue from qualified v5;
+no historical evidence or rejected export is overwritten or used as a parent.
+
+Earlier continue16 chronological progress follows (superseded totals):
+Further progress: a memory-qualified v3 -> v4 export exists, fresh child feedback
+qualification still pending. Child s4-policy-v4-3fd85d9e1f210f8c comes ONLY from
+policy-continue16-v3-a5-update: MAE 0.008632034094075952, 909 tokens,
+preflight 419.6429217499681s, optimizer 397.0909252499696s, export 397.25951445900137s,
+driver 26206765056, swap -303.75 MiB, grad norm 0.1813056319952011,
+exact roundtrip and independently serialized delta 290.82368713617325.
+New qualified optimizer work now totals 763.1724751669681s = 0.21199235421304669h.
+The earlier a4 v3 -> v4 export s4-policy-v4-fab898fd3137348d FAILS swap +799.57 MiB;
+its 342.8980350419879 optimizer seconds are rejected work, not qualified-chain time.
+That rejected export is NEVER served or used as a parent. All subsequent v4 starts
+bind only to the a5 child. The a6 2158-token pair passes numerical MAE
+0.008920769036255232 but fails combined reference preflight at the 600s deadline;
+no v5 optimizer/export. a7 exhausts its declared sampling without an informative
+complete pair; all starts remain retained. a8 is measuring another whole pair.
+
 QUALIFIED CLOSED CHAIN UPDATES = 3. Historical Updates=2 evidence is preserved.
 The third optimizer step and fresh child-v3 native feedback pass unchanged gates.
 Fresh v3 COMPLETE reconciled /75 feedback: policy-continue16-v3-a4-75-group-3,
@@ -18,7 +59,7 @@ Driver peak 26206765056 <= 26800603136 bytes; 6724 valid nominal-100ms samples.
 Own swap 9920.94 -> 8014.06 MiB, delta -1906.88 MiB; exact immutable roundtrip;
 independently recomputed serialized adapter delta L1 290.5152745246887.
 
-NEW QUALIFIED OPTIMIZER WORK: 366.0815499169985s = 0.10168931942138847 hours.
+Third-step-only optimizer work: 366.0815499169985s = 0.10168931942138847 hours.
 Only optimizer elapsed_seconds counts here; sampling, preflight, frozen-reference
 computation, IO, failed attempts and idle time do not count toward this target.
 This is NOT multi-hour GRPO. Fresh AdamW per invocation; S5 is not started.

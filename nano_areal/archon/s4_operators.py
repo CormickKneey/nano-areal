@@ -86,12 +86,22 @@ def tokenwise_splitkv_attention(query, key, value, query_offset):
     return _TokenwiseSplitKV.apply(query, key, value, query_offset)
 
 
-def affine_weights(packed, scales, biases):
+def affine_weights(packed, scales, biases, *, row_chunk_size=None):
     if packed.ndim != 2 or scales.ndim != 2 or scales.shape != biases.shape:
         raise ValueError("Expected matrix affine quantization tensors")
     if (packed.shape[0] != scales.shape[0]
             or packed.shape[1] * 8 != scales.shape[1] * 64):
         raise ValueError("Only 4-bit affine groups of 64 are supported")
+    if row_chunk_size is not None:
+        if type(row_chunk_size) is not int or row_chunk_size <= 0:
+            raise ValueError("Affine row chunk size must be a positive integer")
+        weights = torch.empty((packed.shape[0], packed.shape[1] * 8),
+                              device=packed.device, dtype=torch.float32)
+        for start in range(0, packed.shape[0], row_chunk_size):
+            end = min(start + row_chunk_size, packed.shape[0])
+            weights[start:end].copy_(affine_weights(
+                packed[start:end], scales[start:end], biases[start:end]))
+        return weights
     shifts = torch.arange(8, device=packed.device, dtype=torch.int32) * 4
     values = ((packed.to(torch.int32)[..., None] >> shifts) & 15).float()
     values = values.reshape(scales.shape[0], scales.shape[1], 64)
