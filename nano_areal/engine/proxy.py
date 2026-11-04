@@ -24,19 +24,24 @@ Session lifecycle:
 from __future__ import annotations
 
 import asyncio
-import json
+import math
 import secrets
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
 
+from nano_areal.engine.messages import (
+    anthropic_request_to_openai,
+    openai_completion_to_messages_sse,
+)
+from nano_areal.engine.multimodal import has_images, prepare_single_image
 from nano_areal.engine.types import InteractionRecord, TrajectoryTensors
-
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -49,6 +54,9 @@ class ProxySession:
     interactions: dict[str, InteractionRecord] = field(default_factory=dict)
     _last_id: str | None = field(default=None, repr=False)
     active: bool = True
+    pending: set[asyncio.Task] = field(default_factory=set, repr=False)
+    requests: list[dict] = field(default_factory=list)
+    policy_identity: tuple[str, int] | None = None
 
     def last_interaction(self) -> InteractionRecord | None:
         return self.interactions.get(self._last_id) if self._last_id else None
@@ -76,12 +84,14 @@ class OpenAIProxyServer:
         host: str = "127.0.0.1",
         port: int = 8001,
         model_name: str = "default",
+        processor=None,
     ):
         self.vllm_base_url = vllm_base_url
         self.tokenizer = tokenizer
         self.host = host
         self.port = port
         self.model_name = model_name
+        self.processor = processor
 
         self._sessions: dict[str, ProxySession] = {}
         self._key_to_session: dict[str, str] = {}   # api_key → session_id
@@ -89,6 +99,9 @@ class OpenAIProxyServer:
         self.app = FastAPI(title="nano-areal proxy")
         self._vllm: AsyncOpenAI | None = None
         self._server_task: asyncio.Task | None = None
+        self._server = None
+        self.expected_policy_version: int | None = None
+        self.policy_binding = None
 
         self._setup_routes()
 
@@ -102,7 +115,8 @@ class OpenAIProxyServer:
         self._vllm = AsyncOpenAI(
             base_url=self.vllm_base_url,
             api_key="EMPTY",
-            http_client=httpx.AsyncClient(timeout=120.0),
+            http_client=httpx.AsyncClient(timeout=600.0),
+            max_retries=0,
         )
 
         config = uvicorn.Config(
@@ -112,19 +126,31 @@ class OpenAIProxyServer:
             log_level="warning",
         )
         server = uvicorn.Server(config)
+        server.capture_signals = nullcontext
+        self._server = server
         self._server_task = asyncio.create_task(server.serve())
         # Give the server a moment to bind
         await asyncio.sleep(0.5)
 
     async def stop(self):
+        for session in tuple(self._sessions.values()):
+            await self._close_session(session)
         if self._server_task:
-            self._server_task.cancel()
+            self._server.should_exit = True
             try:
-                await self._server_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._server_task, timeout=10.0)
+            except asyncio.TimeoutError:
+                self._server_task.cancel()
+                await asyncio.gather(self._server_task, return_exceptions=True)
         if self._vllm:
             await self._vllm.close()
+
+    async def _close_session(self, session: ProxySession):
+        session.active = False
+        pending = tuple(session.pending)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
     @property
     def base_url(self) -> str:
@@ -139,8 +165,13 @@ class OpenAIProxyServer:
         if key != ADMIN_KEY:
             raise HTTPException(status_code=401, detail="Invalid admin key")
 
-    def _require_session(self, authorization: str | None) -> ProxySession:
-        key = (authorization or "").removeprefix("Bearer ").strip()
+    def _require_session(
+        self,
+        authorization: str | None,
+        x_api_key: str | None = None,
+    ) -> ProxySession:
+        # BFCL sends Authorization: Bearer. dsh sends x-api-key.
+        key = (x_api_key or "").strip() or (authorization or "").removeprefix("Bearer ").strip()
         sid = self._key_to_session.get(key)
         if not sid or sid not in self._sessions:
             raise HTTPException(status_code=401, detail="Invalid session key")
@@ -153,16 +184,12 @@ class OpenAIProxyServer:
     # Token capture helpers
     # ------------------------------------------------------------------
 
-    def _tokenize_messages(self, messages: list[dict]) -> list[int]:
+    def _tokenize_messages(self, messages: list[dict], tools=None) -> list[int]:
         """Tokenize a message list as prompt (add_generation_prompt=True)."""
-        try:
-            return self.tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True
-            )
-        except Exception:
-            # Fallback: plain concatenation
-            text = " ".join(m.get("content") or "" for m in messages)
-            return self.tokenizer(text, add_special_tokens=True).input_ids
+        return self.tokenizer.apply_chat_template(
+            messages, tools=tools, tokenize=True, add_generation_prompt=True,
+            return_dict=False,
+        )
 
     def _tokenize_text(self, text: str) -> list[int]:
         """Tokenize raw text without special tokens."""
@@ -206,10 +233,30 @@ class OpenAIProxyServer:
         async def chat_completions(
             request: Request,
             authorization: str | None = Header(default=None),
+            x_api_key: str | None = Header(default=None),
         ):
-            session = self._require_session(authorization)
+            session = self._require_session(authorization, x_api_key)
             body = await request.json()
-            return await self._handle_chat_completion(body, session)
+            return await self._dispatch_completion(body, session)
+
+        @app.post("/v1/messages")
+        async def messages(
+            request: Request,
+            authorization: str | None = Header(default=None),
+            x_api_key: str | None = Header(default=None),
+        ):
+            # dsh sdk-minimal posts Anthropic Messages here and requires SSE.
+            session = self._require_session(authorization, x_api_key)
+            body = await request.json()
+            try:
+                openai_body = anthropic_request_to_openai(body)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            payload = await self._dispatch_completion(
+                openai_body, session, return_payload=True
+            )
+            sse = openai_completion_to_messages_sse(payload)
+            return StreamingResponse(iter([sse]), media_type="text/event-stream")
 
         @app.post("/rl/set_reward")
         async def set_reward(
@@ -228,8 +275,8 @@ class OpenAIProxyServer:
         @app.post("/rl/end_session")
         async def end_session(authorization: str | None = Header(default=None)):
             session = self._require_session(authorization)
-            session.active = False
-            return {"ok": True}
+            await self._close_session(session)
+            return {"ok": True, "requests": session.requests}
 
         @app.post("/export_trajectories")
         async def export_trajectories(
@@ -244,8 +291,14 @@ class OpenAIProxyServer:
             session = self._sessions.get(session_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
+            if session.active or session.pending:
+                raise HTTPException(
+                    409, "End the session before exporting trajectories"
+                )
 
-            tensors = _build_trajectories(session, discount)
+            tensors = [] if body.get("discard", False) else _build_trajectories(
+                session, discount
+            )
             # Serialize tensors to lists for JSON transport
             result = [
                 {
@@ -253,6 +306,15 @@ class OpenAIProxyServer:
                     "response_mask": t.response_mask.tolist(),
                     "logprobs": t.logprobs.tolist(),
                     "reward": t.reward,
+                    "truncated": t.truncated,
+                    "policy_model": t.policy_model,
+                    "policy_version": t.policy_version,
+                    "pixel_values": (
+                        t.pixel_values.tolist() if t.pixel_values is not None else None
+                    ),
+                    "image_grid_thw": (
+                        t.image_grid_thw.tolist() if t.image_grid_thw is not None else None
+                    ),
                 }
                 for t in tensors
             ]
@@ -265,13 +327,57 @@ class OpenAIProxyServer:
     # Core: intercept, tokenize, forward, capture
     # ------------------------------------------------------------------
 
+    async def _dispatch_completion(
+        self, body: dict, session: ProxySession, return_payload: bool = False,
+    ):
+        if not session.active:
+            raise HTTPException(401, "Session has ended")
+        task = asyncio.current_task()
+        entry = {"session_id": session.session_id, "status": "pending"}
+        session.requests.append(entry)
+        session.pending.add(task)
+        try:
+            result = await self._handle_chat_completion(body, session, return_payload)
+            entry.update(status="response-ready", response_id=session._last_id)
+            return result
+        except asyncio.CancelledError:
+            entry["status"] = "cancelled"
+            raise
+        except Exception as error:
+            entry.update(status="failed", error_type=type(error).__name__)
+            raise
+        finally:
+            session.pending.discard(task)
+
     async def _handle_chat_completion(
-        self, body: dict, session: ProxySession
-    ) -> JSONResponse:
+        self,
+        body: dict,
+        session: ProxySession,
+        return_payload: bool = False,
+    ) -> JSONResponse | dict:
         messages: list[dict] = body.get("messages", [])
+        binding = self.policy_binding
+        identity = (binding.model, binding.version) if binding else None
+        if session.interactions and session.policy_identity != identity:
+            raise HTTPException(409, "Policy changed inside an active session")
+        session.policy_identity = identity
+        expected_version = self.expected_policy_version
 
         # 1. Tokenize prompt
-        prompt_ids = self._tokenize_messages(messages)
+        pixel_values, image_grid_thw = None, None
+        if has_images(messages):
+            if self.processor is None:
+                raise HTTPException(
+                    422, "Image requests require an explicit local processor"
+                )
+            try:
+                prompt_ids, pixel_values, image_grid_thw = prepare_single_image(
+                    self.processor, messages, body.get("tools")
+                )
+            except (ValueError, OSError, KeyError) as error:
+                raise HTTPException(422, str(error)) from error
+        else:
+            prompt_ids = self._tokenize_messages(messages, body.get("tools"))
 
         # 2. Find parent (for multi-turn reward discount tree)
         parent_id = self._find_parent_id(messages, session)
@@ -285,12 +391,18 @@ class OpenAIProxyServer:
             "top_p": body.get("top_p", 1.0),
             "logprobs": True,
             "top_logprobs": 1,
+            "extra_body": {"return_token_ids": True, "top_k": -1},
         }
         if body.get("tools"):
             vllm_kwargs["tools"] = body["tools"]
             vllm_kwargs["tool_choice"] = body.get("tool_choice", "auto")
 
         response = await self._vllm.chat.completions.create(**vllm_kwargs)
+        if binding is not None:
+            try:
+                binding.verify_response(response.model, expected_version)
+            except ValueError as error:
+                raise HTTPException(502, str(error)) from error
 
         # 4. Capture output tokens and logprobs
         choice = response.choices[0]
@@ -312,10 +424,37 @@ class OpenAIProxyServer:
         token_logprobs: list[float] = []
         if choice.logprobs and choice.logprobs.content:
             token_logprobs = [lp.logprob for lp in choice.logprobs.content]
-        # Pad/trim logprobs to match output_ids length
-        if len(token_logprobs) < len(output_ids):
-            token_logprobs += [0.0] * (len(output_ids) - len(token_logprobs))
-        token_logprobs = token_logprobs[: len(output_ids)]
+        exact = (response.model_extra or {}).get("nano_areal")
+        if exact is not None:
+            expected_prompt = prompt_ids
+            if (self.expected_policy_version is not None
+                    and exact.get("policy_version") != self.expected_policy_version):
+                raise HTTPException(502, "Backend policy version differs from rollout version")
+            prompt_ids = exact["prompt_token_ids"]
+            output_ids = exact["completion_token_ids"]
+            token_logprobs = exact["token_logprobs"]
+            if prompt_ids != expected_prompt:
+                raise HTTPException(502, "Backend prompt tokenization differs from proxy")
+        elif getattr(response, "prompt_token_ids", None) is not None:
+            backend_prompt = response.prompt_token_ids
+            output_ids = getattr(choice, "token_ids", None)
+            if backend_prompt != prompt_ids:
+                raise HTTPException(502, "Backend prompt tokenization differs from proxy")
+            if (self.expected_policy_version is not None
+                    and self.policy_binding is None):
+                raise HTTPException(502, "Backend does not report a policy version")
+            prompt_ids = backend_prompt
+            if (response.usage is None
+                    or response.usage.prompt_tokens != len(prompt_ids)
+                    or output_ids is None
+                    or response.usage.completion_tokens != len(output_ids)):
+                raise HTTPException(502, "Backend token IDs differ from usage")
+        else:
+            raise HTTPException(502, "Trajectories require exact backend token IDs")
+        if not output_ids or len(token_logprobs) != len(output_ids):
+            raise HTTPException(502, "Missing or misaligned behavior logprobs")
+        if not all(math.isfinite(value) and value <= 0 for value in token_logprobs):
+            raise HTTPException(502, "Invalid behavior logprobs")
 
         # 5. Build full sequence: prompt + output
         full_ids = prompt_ids + output_ids
@@ -343,17 +482,37 @@ class OpenAIProxyServer:
             response_content=content,
             tool_calls=tool_calls_dict,
             parent_id=parent_id,
+            finish_reason=_finish_reason(choice.finish_reason),
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            policy_model=(binding.model if binding else None),
+            policy_version=(binding.version if binding else None),
         )
         session.interactions[rid] = rec
         session._last_id = rid
 
-        # 8. Return standard ChatCompletion JSON to agent
-        return JSONResponse(content=response.model_dump())
+        # 8. Return standard ChatCompletion JSON, or the payload for Messages SSE.
+        payload = response.model_dump()
+        reasoning = getattr(choice.message, "reasoning_content", None)
+        if reasoning and payload.get("choices"):
+            payload["choices"][0].setdefault("message", {})["reasoning_content"] = reasoning
+        if return_payload:
+            return payload
+        return JSONResponse(content=payload)
 
 
 # ---------------------------------------------------------------------------
 # Reward backpropagation + trajectory assembly
 # ---------------------------------------------------------------------------
+
+def _finish_reason(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    enum_value = getattr(value, "value", None)
+    return enum_value if isinstance(enum_value, str) else str(value)
+
 
 def _build_trajectories(
     session: ProxySession,
@@ -406,6 +565,7 @@ class OpenAIProxyClient:
     def __init__(self, proxy_base_url: str):
         self.proxy_base_url = proxy_base_url
         self.session_id: str | None = None
+        self.request_audit: list[dict] = []
         self.api_key: str | None = None
         self.trajectories: list[TrajectoryTensors] = []
         self._http: httpx.AsyncClient | None = None
@@ -417,7 +577,7 @@ class OpenAIProxyClient:
     async def __aenter__(self):
         self._http = httpx.AsyncClient(
             base_url=self.proxy_base_url,
-            timeout=30.0,
+            timeout=600.0,
         )
         r = await self._http.post(
             "/rl/start_session",
@@ -432,14 +592,19 @@ class OpenAIProxyClient:
     async def __aexit__(self, *args):
         if self._http and self.session_id:
             try:
-                await self._http.post(
+                ended = await self._http.post(
                     "/rl/end_session",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                 )
+                ended.raise_for_status()
+                self.request_audit = ended.json().get("requests", [])
                 r = await self._http.post(
                     "/export_trajectories",
                     headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"session_id": self.session_id, "discount": self._discount},
+                    json={
+                        "session_id": self.session_id, "discount": self._discount,
+                        "discard": bool(args and args[0] is not None),
+                    },
                 )
                 r.raise_for_status()
                 import torch
@@ -449,11 +614,21 @@ class OpenAIProxyClient:
                         response_mask=torch.tensor(t["response_mask"], dtype=torch.float),
                         logprobs=torch.tensor(t["logprobs"], dtype=torch.float),
                         reward=t["reward"],
+                        truncated=t.get("truncated", False),
+                        policy_model=t.get("policy_model"),
+                        policy_version=t.get("policy_version"),
+                        pixel_values=(torch.tensor(t["pixel_values"], dtype=torch.float32)
+                                      if t.get("pixel_values") is not None else None),
+                        image_grid_thw=(torch.tensor(t["image_grid_thw"], dtype=torch.long)
+                                        if t.get("image_grid_thw") is not None else None),
                     )
                     for t in r.json()
                 ]
             except Exception:
-                pass
+                if not args or args[0] is None:
+                    raise
+            finally:
+                await self._http.aclose()
         if self._http:
             await self._http.aclose()
 
@@ -468,18 +643,20 @@ class OpenAIProxyClient:
         self._discount = discount
         assert self._http and self.api_key
         if isinstance(rewards, (int, float)):
-            await self._http.post(
+            response = await self._http.post(
                 "/rl/set_reward",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={"reward": float(rewards)},
             )
+            response.raise_for_status()
         else:
             for rid, r in rewards.items():
-                await self._http.post(
+                response = await self._http.post(
                     "/rl/set_reward",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json={"interaction_id": rid, "reward": float(r)},
                 )
+                response.raise_for_status()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

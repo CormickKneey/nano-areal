@@ -138,11 +138,11 @@ def test_buffer():
 
         # Consumer is at version 5: should discard v < 3 (gap > 2)
         buf.update_policy_version(5)
-        accepted = await buf.get_batch(n=4, timeout=2.0)
+        accepted = await buf.get_batch(n=3, timeout=2.0)
 
         for t in accepted:
             gap = 5 - t.policy_version
-            assert gap <= 2, f"Accepted trajectory with gap={gap} > max_head_offpolicyness=2"
+            assert 0 <= gap <= 2, f"Accepted trajectory with invalid gap={gap}"
 
         print(f"  [PASS] buffer: accepted {len(accepted)} trajectories, "
               f"discarded {buf.stats.total_discarded}")

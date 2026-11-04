@@ -1,0 +1,105 @@
+Continue17 authoritative closeout: 2026-11-04 (Asia/Shanghai)
+Repo: /Users/bear/workspace/github/nano-areal
+Branch: cursor/macos-qwen3vl-v02-plan-f4cf; PR #4 OPEN; no merge/force-push.
+S1 accepted; S2 accepted; S3 accepted. S5 ACCEPTED (offline unit contracts).
+
+S5: 86 dedicated tests in scripts/test_s5.py, 86 passed in1.27s.
+Full suite: 329 passed,1 existing checkpoint warning in18.95s.
+S1 smoke:7 passed. Targeted Ruff passes for all3 changed Python files.
+Four losses use the same Trajectory -> ArchonTrainer.train_step -> dispatcher,
+with finite/nonzero backward and real tiny CPU AdamW updates. Exact surrogate
+gradients, masks/KL, frozen reference/behavior/reward/precomputed advantages,
+incomplete groups, explicit task IDs and truncation are covered. Fixed all-short
+on_incomplete=zeros returning normalized advantages; default batch unchanged.
+Buffer sync/async now share is_offpolicy, with stale/future/boundary/accounting
+tests. Config/CLI Metal default remains GRPO; native Metal runner stays GRPO-only.
+No alternate-loss native training or paper-parity/benchmark claim.
+Scope and reproduction: docs/s5-algorithms.md; docs/v0.2-plan.md section8.
+Initial15 failures/69 passes and intermediate84 passes retained alongside final
+focused/full/smoke/lint logs under ignored .s1-cache/continue17-*.
+Initial failures include the replaced CPU-fixture device-query mock; final fixture
+injects a CPU policy without device selection, native/model loading or compiling.
+No server, rollout or long training started. Port8000 has no listener.
+Quant RSI/OrbStack/unrelated LaunchAgents left alone. No weights, hidden tests,
+task solutions or raw sessions added. S4 audit bindings SHA256 remains unchanged.
+
+PRESERVED CONTINUE16 S4 CLOSEOUT (2026-11-04T02:54:11+08:00), source tip1764619:
+This is historical measured evidence, NOT new continue17 optimizer work.
+
+QUALIFIED CLOSED CHAIN UPDATES=20
+Current immutable policy: s4-policy-v20-8b386344d079b75f
+Manifest: artifacts/s4/policy-continue16-v19-a53-update-r23/policy-v20.json
+Adapter: artifacts/s4/policy-continue16-v19-a53-update-r23/adapter-v20
+Locked v0/v1/v2 remain unchanged:
+s4-policy-v0-d43b14bef7d62f10
+s4-policy-v1-b60ac01c1b9c71ef
+s4-policy-v2-911e2399cc5f9154
+
+MEASURED MULTI-HOUR BOUNDED GRPO:
+18 newly qualified v2->v20 updates in continue16.
+Actual qualified optimizer work: 7612.880419503024s = 2.1146890054175067h.
+Excludes sampling, policy/reference preflight, loading/export, idle, rejected and
+partial work. Completed optimizer including rejected: 13726.74335454317s;
+rejected completed portion: 6113.862935040146s (NOT acceptance).
+Fresh AdamW per bounded invocation; NOT persistent optimizer-state resumption or
+continuous single-process training. No 8192-token/co-residency/benchmark-gain claim.
+
+Every qualified update passes unchanged MAE<=0.01, combined policy+native-reference
+preflight<=600s, independent backward/optimizer/export<=600s, driver<=26800603136,
+no swap endpoint growth vs own baseline, finite/nonzero gradients, changed adapter,
+immutable exact roundtrip and source/parent/group/file hashes. Whole COMPLETE
+reconciled fixed-task pairs with genuine external rewards only. No KV detaching,
+reference gradients, threshold/allocation loosening, subsets, trimming or pooling.
+All real serving/native loads sequential; owned API+engine stop before native.
+
+Original /0 MAE 0.009696634512675821; whole /10 0.007422680729897122 reproduce exactly
+under r21 and r23. Locked v1 /75 0.007358574464604883 and fresh v2 /10
+0.006540321691405483 remain accepted. Locked v1->v2 preflight557.864638332976s,
+optimizer480.0220505410107s, driver26206765056, swap-1001.07MiB unchanged.
+New accepted maximum preflight548.7512551670079s, optimizer523.3404543750221s,
+driver26206765056. No gate relaxed.
+
+Latest v19->v20: MAE 0.009690006444770916; combined preflight 473.6124106249772s;
+optimizer 418.5242938749725s; driver 23290658816;
+swap -295.0599999999995MiB; independently serialized delta
+292.275783598423; exact immutable roundtrip.
+Final production-v20 /75 COMPLETE2/2, reconciled, 909 tokens, rewards[1,1].
+Native-v20 feedback MAE 0.009032955715930697, 230.8480740840314s; expected exit2
+only zero advantages; read-only Updates=0 does not reset qualified chain20.
+Read-only driver snapshot20881031168, swap-136MiB (not optimizer sampled peaks).
+
+Accepted source: fe0a03f opt-in chunked affine-head load (r21), then 4c863f2
+opt-in text-only checkpoint materialization (r23). Default multimodal path unchanged;
+all checkpoint keys/shapes still validated, omitted vision830695424 bytes stays meta,
+image inputs reject, loader source hash bound. Same whole v11 a25 group reference
+hash and serialized adapter bytes exactly match rejected r21. Rejected r22 cache
+experiment fails swap+213.38MiB, reverted, never promoted. All failures retained.
+Expanded sampling a35 exhausted; a37..64 focused plan: /75, up to12 whole pairs,
+first COMPLETE informative pair without token-length selection. Every start retained.
+Engineering starts388 / reported passed149 are NOT unbiased benchmark evidence.
+
+AUDIT: artifacts/s4/policy-continue16-closeout/bindings.json
+SHA256: b712a88d4569279731f3c9024ec6c3dfb0a3603cc776ff8e9c48868da70724fd
+All 18 new steps, immutable parents, historical sources, base/adapter/group hashes,
+serialized deltas, original parity and fresh native feedback for every child verify.
+Full chain/model/report table: docs/s4-training.md (authoritative closeout section).
+Final native report: artifacts/s4/policy-continue16-v19-a53-update-r23/update-v19.json
+Final feedback: artifacts/s4/policy-continue16-v20-a90-feedback/preflight-v20.json
+Final audit: artifacts/s4/policy-continue16-closeout/audit-final.log
+Final tests: 243 passed, 1 warning,13.17s. Corrected PYTHONPATH run passes; initial
+missing-import-path collection failure retained. Seven changed files Ruff-clean;
+state_dict.py retains exactly36 pre-existing lint findings. No unrelated fixes.
+Feedback wrapper filename mismatch recovered using unchanged versioned report;
+all native/model jobs exited before tests/audit. All owned controllers/servers/native
+processes stopped; port8000 closed. Quant RSI/OrbStack/unrelated processes untouched.
+No weights/hidden tests/task solutions/raw sessions committed. continue15 remains dead.
+
+NEXT: S5 unit-contract acceptance complete; no remaining required S5 work.
+Primary S4 multi-hour bounded measurement remains CLOSED; do not reopen unless
+gates regress. Metal default stays GRPO. Optional future S6 is not started.
+Only if separately requested to extend S4, stage qualified v20+adapter symlink
+in a FRESH directory; obtain fresh COMPLETE reconciled production-v20 group with
+genuine external reward spread (current[1,1] cannot train); stop serving; then
+bounded update --policy-version20 --aligned-arithmetic --chunked-affine-load
+--text-only-load --precompute-reference. Keep every gate, sequential loads and
+immutable verification unchanged. Serve only qualified children. No merge/force-push.

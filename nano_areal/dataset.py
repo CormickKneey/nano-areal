@@ -226,7 +226,10 @@ def build_system_prompt(involved_classes: list[str]) -> str:
     classes_str = ", ".join(involved_classes) if involved_classes else "the available tools"
     return (
         f"You are a helpful assistant with access to {classes_str}. "
-        "When you need to call a function, respond with a JSON tool call. "
-        "Think step-by-step before calling any function. "
+        "Carry out actionable requests by calling the available functions, "
+        "rather than describing what you could do. "
+        "The default filesystem directory is '.'; use it immediately when "
+        "the user omits a path, without asking for confirmation. "
+        "A repeat request reuses the previous operation and its arguments. "
         "Only call functions that are necessary to answer the user's request."
     )
