@@ -1,3 +1,12 @@
+## Continue17 scope notice: S5 unit contracts
+
+S5 offline algorithm-switch unit acceptance is recorded in `s5-algorithms.md`:
+86 new tests, full suite 329 passed with one existing warning. No training or
+serving was started, and no S4 gate or evidence artifact changed. The continue16
+measurement below remains closed at source tip `1764619`, Updates=20 and policy
+`s4-policy-v20-8b386344d079b75f`; its audit binding hash is unchanged.
+Metal production/native training remains GRPO-only.
+
 ## Continue16 closeout: measured multi-hour bounded GRPO
 
 Finalized **2026-11-04T02:54:11+08:00** (Asia/Shanghai). This section supersedes all rolling
@@ -15,7 +24,8 @@ continue16 totals below; earlier evidence is historical, not additional steps.
 - Scope is **cumulative bounded fixed-group sequential GRPO**, fresh AdamW per
   invocation. This is **not** continuous single-process training, persistent
   optimizer-state resumption, 8192-token training, train/serve co-residency,
-  benchmark improvement or broad/full S4 generalization. **S5 is not started**.
+  benchmark improvement or broad/full S4 generalization. S5 had not started at
+  that closeout; see the separate continue17 unit acceptance above.
 
 ### Unchanged acceptance gates
 
@@ -125,8 +135,9 @@ No weights, hidden tests, task solutions or raw sessions are committed.
 
 ### Next continuation
 
-The primary multi-hour bounded measurement is complete. Optional S5 loss-switch
-unit tests may start separately; metal default must remain GRPO. If extending S4,
+The primary multi-hour bounded measurement is complete. The then-optional S5
+loss-switch tests are accepted separately in continue17; metal default remains
+GRPO. If extending S4,
 stage qualified v20 plus its adapter symlink in a fresh output directory, collect
 a new complete externally informative production-v20 group (current [1,1] cannot
 train), stop owned serving, then use policy-version 20 with aligned arithmetic,

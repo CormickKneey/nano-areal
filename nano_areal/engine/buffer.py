@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from nano_areal.archon.losses import is_offpolicy
 
 if TYPE_CHECKING:
     from nano_areal.archon.trainer import Trajectory
@@ -78,9 +79,8 @@ class AsyncTrajectoryBuffer:
         """
         Collect `n` valid trajectories from the buffer.
 
-        Trajectories whose policy version is too stale
-        (current_version - traj.version > max_head_offpolicyness)
-        are silently discarded.
+        Trajectories whose policy version is too stale or newer than the
+        trainer are silently discarded using the shared loss-version predicate.
 
         Blocks until `n` valid trajectories are collected or timeout.
         """
@@ -92,12 +92,14 @@ class AsyncTrajectoryBuffer:
             if remaining <= 0:
                 break
             try:
-                traj = await asyncio.wait_for(self._queue.get(), timeout=min(remaining, 2.0))
+                traj = await asyncio.wait_for(
+                    self._queue.get(), timeout=min(remaining, 2.0)
+                )
             except asyncio.TimeoutError:
                 continue
 
             version_gap = self._current_policy_version - traj.policy_version
-            if not 0 <= version_gap <= self.max_head_offpolicyness:
+            if is_offpolicy(version_gap, self.max_head_offpolicyness):
                 self.stats.total_discarded += 1
                 continue
 

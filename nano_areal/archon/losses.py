@@ -33,8 +33,14 @@ def group_advantages(
     A short tail (sync step that did not fill G) is not a full group.
     ``on_incomplete="batch"`` falls back to one batch-wide normalization so
     the step can still train. ``on_incomplete="zeros"`` leaves that tail at
-    zero advantage.
+    zero advantage, including when the entire batch is shorter than G.
+    Explicit ``group_ids`` instead normalize each observed task independently;
+    singleton tasks have zero advantage. The tail policy applies only to
+    implicit contiguous groups.
     """
+    if on_incomplete not in ("batch", "zeros"):
+        raise ValueError("on_incomplete must be 'batch' or 'zeros'")
+    rewards = rewards.detach()
     stats = {"incomplete_groups": 0, "skipped_groups": 0, "advantage_scope": "batch"}
     if rewards.numel() == 0:
         return rewards, stats
@@ -45,7 +51,9 @@ def group_advantages(
         advantages = torch.zeros_like(rewards)
         stats["advantage_scope"] = "group_ids"
         for group_id in dict.fromkeys(group_ids):
-            indices = [index for index, value in enumerate(group_ids) if value == group_id]
+            indices = [
+                index for index, value in enumerate(group_ids) if value == group_id
+            ]
             row = rewards[indices]
             advantages[indices] = _normalize(row, scale=scale)
             if row.numel() == 1:
@@ -58,10 +66,12 @@ def group_advantages(
     n_full, tail = divmod(int(rewards.numel()), group_size)
     if n_full == 0 or tail:
         stats["incomplete_groups"] = 1
-        if on_incomplete == "batch" or n_full == 0:
+        if on_incomplete == "batch":
             return _normalize(rewards, scale=scale).detach(), stats
 
     stats["advantage_scope"] = "group"
+    if n_full == 0:
+        return torch.zeros_like(rewards), stats
     pieces: list[Tensor] = []
     full = rewards[: n_full * group_size].view(n_full, group_size)
     for row in full:
@@ -72,7 +82,7 @@ def group_advantages(
         pieces.append(_normalize(row, scale=scale))
     advantages = torch.cat(pieces, dim=0)
     if tail and on_incomplete == "zeros":
-        advantages = torch.cat([advantages, torch.zeros(tail, device=rewards.device, dtype=rewards.dtype)])
+        advantages = torch.cat([advantages, rewards.new_zeros(tail)])
     return advantages.detach(), stats
 
 

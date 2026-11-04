@@ -1,7 +1,30 @@
-Continue16 authoritative closeout: 2026-11-04T02:54:11+08:00 (Asia/Shanghai)
+Continue17 authoritative closeout: 2026-11-04 (Asia/Shanghai)
 Repo: /Users/bear/workspace/github/nano-areal
 Branch: cursor/macos-qwen3vl-v02-plan-f4cf; PR #4 OPEN; no merge/force-push.
-S1 accepted; S2 accepted; S3 accepted. S5 NOT started.
+S1 accepted; S2 accepted; S3 accepted. S5 ACCEPTED (offline unit contracts).
+
+S5: 86 dedicated tests in scripts/test_s5.py, 86 passed in1.27s.
+Full suite: 329 passed,1 existing checkpoint warning in18.95s.
+S1 smoke:7 passed. Targeted Ruff passes for all3 changed Python files.
+Four losses use the same Trajectory -> ArchonTrainer.train_step -> dispatcher,
+with finite/nonzero backward and real tiny CPU AdamW updates. Exact surrogate
+gradients, masks/KL, frozen reference/behavior/reward/precomputed advantages,
+incomplete groups, explicit task IDs and truncation are covered. Fixed all-short
+on_incomplete=zeros returning normalized advantages; default batch unchanged.
+Buffer sync/async now share is_offpolicy, with stale/future/boundary/accounting
+tests. Config/CLI Metal default remains GRPO; native Metal runner stays GRPO-only.
+No alternate-loss native training or paper-parity/benchmark claim.
+Scope and reproduction: docs/s5-algorithms.md; docs/v0.2-plan.md section8.
+Initial15 failures/69 passes and intermediate84 passes retained alongside final
+focused/full/smoke/lint logs under ignored .s1-cache/continue17-*.
+Initial failures include the replaced CPU-fixture device-query mock; final fixture
+injects a CPU policy without device selection, native/model loading or compiling.
+No server, rollout or long training started. Port8000 has no listener.
+Quant RSI/OrbStack/unrelated LaunchAgents left alone. No weights, hidden tests,
+task solutions or raw sessions added. S4 audit bindings SHA256 remains unchanged.
+
+PRESERVED CONTINUE16 S4 CLOSEOUT (2026-11-04T02:54:11+08:00), source tip1764619:
+This is historical measured evidence, NOT new continue17 optimizer work.
 
 QUALIFIED CLOSED CHAIN UPDATES=20
 Current immutable policy: s4-policy-v20-8b386344d079b75f
@@ -71,8 +94,10 @@ all native/model jobs exited before tests/audit. All owned controllers/servers/n
 processes stopped; port8000 closed. Quant RSI/OrbStack/unrelated processes untouched.
 No weights/hidden tests/task solutions/raw sessions committed. continue15 remains dead.
 
-NEXT: Primary multi-hour bounded measurement complete; optional S5 tests may start
-separately, metal default GRPO. To extend S4, stage qualified v20+adapter symlink
+NEXT: S5 unit-contract acceptance complete; no remaining required S5 work.
+Primary S4 multi-hour bounded measurement remains CLOSED; do not reopen unless
+gates regress. Metal default stays GRPO. Optional future S6 is not started.
+Only if separately requested to extend S4, stage qualified v20+adapter symlink
 in a FRESH directory; obtain fresh COMPLETE reconciled production-v20 group with
 genuine external reward spread (current[1,1] cannot train); stop serving; then
 bounded update --policy-version20 --aligned-arithmetic --chunked-affine-load
